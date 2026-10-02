@@ -1,529 +1,212 @@
 import os
 import sqlite3
-import hashlib
-import secrets
-from datetime import datetime, timezone
+from datetime import datetime
 from functools import wraps
 
 from flask import (
     Flask,
+    render_template_string,
     request,
     redirect,
+    url_for,
     session,
     flash,
-    render_template_string,
-    url_for,
 )
-from dotenv import load_dotenv
-
-load_dotenv()
-
-# ============================================================
-# APP CONFIG
-# ============================================================
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "change-this-secret-key")
 
-app.secret_key = os.getenv(
-    "SECRET_KEY",
-    "CHANGE-ME-IN-RENDER"
-)
+DB_PATH = os.environ.get("DATABASE_PATH", "rafa_store.db")
 
-DATABASE = os.getenv(
-    "DATABASE_PATH",
-    "store.db"
-)
-
-STAFF_PASSWORD = os.getenv(
-    "STAFF_PASSWORD",
-    "CHANGE_THIS_PASSWORD"
-)
-
-IP_HASH_SALT = os.getenv(
-    "IP_HASH_SALT",
-    "CHANGE_THIS_IP_SALT"
-)
-
-STORE_NAME = "PADRON"
-
+STORE_NAME = "Rafa's Store"
 STORE_ADDRESS = "268 A. Mabini Street, Liliw, Laguna"
-
 STORE_PHONE = "0976 1296450"
 
-STORE_EMAIL = os.getenv("STORE_EMAIL", "")
-
-# ------------------------------------------------------------
-# YOUR GITHUB STATIC IMAGES
-# ------------------------------------------------------------
-
-IMAGE_0 = "/static/image0%20%283%29.jpg"
-IMAGE_1 = "/static/image1.jpg"
+# Staff credentials.
+# For production, set STAFF_USERNAME and STAFF_PASSWORD as Render environment variables.
+STAFF_USERNAME = os.environ.get("STAFF_USERNAME", "staff")
+STAFF_PASSWORD = os.environ.get("STAFF_PASSWORD", "change-me")
 
 
-# ============================================================
+# -------------------------------------------------------------------
 # DATABASE
-# ============================================================
+# -------------------------------------------------------------------
 
 def get_db():
-    connection = sqlite3.connect(DATABASE)
-    connection.row_factory = sqlite3.Row
-    return connection
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-def init_database():
+def init_db():
+    conn = get_db()
 
-    connection = get_db()
-
-    connection.executescript("""
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             description TEXT DEFAULT '',
             price REAL DEFAULT 0,
             stock INTEGER DEFAULT 0,
-            sizes TEXT DEFAULT '',
-            color TEXT DEFAULT '',
-            image_url TEXT DEFAULT '',
-            active INTEGER DEFAULT 1,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS visitors (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ip_hash TEXT,
-            device TEXT DEFAULT 'Unknown',
-            browser TEXT DEFAULT 'Unknown',
-            language TEXT DEFAULT 'Unknown',
-            referrer TEXT DEFAULT '',
-            visited_at TEXT NOT NULL
-        );
+            image TEXT DEFAULT '',
+            category TEXT DEFAULT 'Slippers',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
     """)
 
-    count = connection.execute(
-        "SELECT COUNT(*) FROM products"
-    ).fetchone()[0]
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS visitors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT,
+            user_agent TEXT,
+            device TEXT,
+            language TEXT,
+            visited_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
-    if count == 0:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
 
-        now = datetime.now(timezone.utc).isoformat()
+    existing = conn.execute(
+        "SELECT COUNT(*) AS count FROM products"
+    ).fetchone()["count"]
 
-        products = [
+    if existing == 0:
+        sample_products = [
             (
-                "Handmade Mules",
-                "Handcrafted footwear showcasing the creativity and craftsmanship of Laguna artisans.",
-                0,
-                0,
-                "Various",
-                "Various",
-                IMAGE_0
+                "Classic Filipino Slippers",
+                "Comfortable everyday slippers.",
+                299,
+                15,
+                "",
+                "Slippers",
             ),
             (
-                "Flats",
-                "Handcrafted flats using locally sourced materials and Filipino-inspired designs.",
-                0,
-                0,
-                "Various",
-                "Various",
-                IMAGE_1
+                "Handcrafted Brown Slippers",
+                "A simple handcrafted Filipino-inspired design.",
+                399,
+                10,
+                "",
+                "Handcrafted",
             ),
             (
-                "Platform Espadrilles",
-                "Handmade platform espadrilles featuring traditional Filipino craftsmanship.",
-                0,
-                0,
-                "Various",
-                "Various",
-                IMAGE_0
+                "Premium Comfort Slippers",
+                "Soft and comfortable slippers for everyday use.",
+                499,
+                8,
+                "",
+                "Premium",
             ),
-            (
-                "Wedge Espadrilles",
-                "Handcrafted wedge espadrilles made with locally sourced materials.",
-                0,
-                0,
-                "Various",
-                "Various",
-                IMAGE_1
-            ),
-            (
-                "Estela Interchangeable Strap",
-                "An innovative interchangeable-strap design created through continuous product innovation.",
-                0,
-                0,
-                "Various",
-                "Various",
-                IMAGE_0
-            )
         ]
 
-        for product in products:
+        conn.executemany("""
+            INSERT INTO products
+            (name, description, price, stock, image, category)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, sample_products)
 
-            connection.execute(
-                """
-                INSERT INTO products
-                (
-                    name,
-                    description,
-                    price,
-                    stock,
-                    sizes,
-                    color,
-                    image_url,
-                    active,
-                    created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
-                """,
-                (*product, now)
-            )
-
-    connection.commit()
-    connection.close()
+    conn.commit()
+    conn.close()
 
 
-def update_default_images():
-
-    connection = get_db()
-
-    connection.execute(
-        """
-        UPDATE products
-        SET image_url = ?
-        WHERE name = 'Handmade Mules'
-        """,
-        (IMAGE_0,)
-    )
-
-    connection.execute(
-        """
-        UPDATE products
-        SET image_url = ?
-        WHERE name = 'Flats'
-        """,
-        (IMAGE_1,)
-    )
-
-    connection.execute(
-        """
-        UPDATE products
-        SET image_url = ?
-        WHERE name = 'Platform Espadrilles'
-        """,
-        (IMAGE_0,)
-    )
-
-    connection.execute(
-        """
-        UPDATE products
-        SET image_url = ?
-        WHERE name = 'Wedge Espadrilles'
-        """,
-        (IMAGE_1,)
-    )
-
-    connection.execute(
-        """
-        UPDATE products
-        SET image_url = ?
-        WHERE name = 'Estela Interchangeable Strap'
-        """,
-        (IMAGE_0,)
-    )
-
-    connection.commit()
-    connection.close()
+init_db()
 
 
-# ============================================================
-# LANGUAGES
-# ============================================================
+# -------------------------------------------------------------------
+# HELPERS
+# -------------------------------------------------------------------
 
-TRANSLATIONS = {
-
-    "en": {
-        "shop": "Shop",
-        "about": "About Us",
-        "mission": "Mission",
-        "vision": "Vision",
-        "contact": "Contact",
-        "staff": "Staff",
-        "products": "Our Products",
-        "hero_badge": "Filipino craftsmanship • Liliw, Laguna 🇵🇭",
-        "hero_title": "Footwear with a Filipino soul.",
-        "hero_text": (
-            "Handcrafted footwear celebrating local heritage, "
-            "Filipino artisans, creativity, sustainability, and craftsmanship."
-        ),
-        "explore": "Explore Products",
-        "story": "Our Story",
-        "materials": "Filipino Materials",
-        "heritage": "Our Heritage",
-        "mission_title": "Our Mission",
-        "vision_title": "Our Vision",
-        "sizes": "Sizes",
-        "color": "Color",
-        "in_stock": "In stock",
-        "only_left": "Only {count} left",
-        "out_stock": "Out of stock",
-        "contact_title": "Contact Us",
-        "staff_login": "Staff Login",
-        "theme": "Theme",
-        "light": "Bright",
-        "dark": "Dark",
-        "footer": (
-            "Handcrafted footwear from Liliw, Laguna, "
-            "celebrating Filipino creativity and craftsmanship."
-        )
-    },
-
-    "fil": {
-        "shop": "Mamili",
-        "about": "Tungkol sa Amin",
-        "mission": "Misyon",
-        "vision": "Bisyon",
-        "contact": "Kontak",
-        "staff": "Staff",
-        "products": "Aming mga Produkto",
-        "hero_badge": "Gawang Pilipino • Liliw, Laguna 🇵🇭",
-        "hero_title": "Footwear na may pusong Pilipino.",
-        "hero_text": (
-            "Handcrafted na footwear na nagpapakita ng lokal na kultura, "
-            "mga artisan, pagkamalikhain, sustainability, at kalidad."
-        ),
-        "explore": "Tingnan ang mga Produkto",
-        "story": "Aming Kuwento",
-        "materials": "Mga Materyales na Pilipino",
-        "heritage": "Aming Pamana",
-        "mission_title": "Aming Misyon",
-        "vision_title": "Aming Bisyon",
-        "sizes": "Mga Sukat",
-        "color": "Kulay",
-        "in_stock": "May stock",
-        "only_left": "{count} na lang ang natitira",
-        "out_stock": "Walang stock",
-        "contact_title": "Makipag-ugnayan",
-        "staff_login": "Staff Login",
-        "theme": "Tema",
-        "light": "Maliwanag",
-        "dark": "Madilim",
-        "footer": (
-            "Handcrafted footwear mula sa Liliw, Laguna, "
-            "na nagpapakita ng galing at pagkamalikhain ng mga Pilipino."
-        )
-    },
-
-    "ceb": {
-        "shop": "Palit",
-        "about": "Mahitungod Kanamo",
-        "mission": "Misyon",
-        "vision": "Bisyon",
-        "contact": "Kontak",
-        "staff": "Staff",
-        "products": "Among mga Produkto",
-        "hero_badge": "Pinoy nga pagkamaabtik • Liliw, Laguna 🇵🇭",
-        "hero_title": "Footwear nga adunay Filipino nga kalag.",
-        "hero_text": (
-            "Handcrafted nga footwear nga nagpakita sa lokal nga kultura, "
-            "mga artisan, pagkamamugnaon, sustainability, ug kalidad."
-        ),
-        "explore": "Tan-awa ang mga Produkto",
-        "story": "Among Istorya",
-        "materials": "Mga Materyales nga Pilipino",
-        "heritage": "Atong Kabilin",
-        "mission_title": "Among Misyon",
-        "vision_title": "Among Bisyon",
-        "sizes": "Mga Gidak-on",
-        "color": "Kolor",
-        "in_stock": "Adunay stock",
-        "only_left": "{count} na lang nahibilin",
-        "out_stock": "Walay stock",
-        "contact_title": "Kontak Kami",
-        "staff_login": "Staff Login",
-        "theme": "Tema",
-        "light": "Hayag",
-        "dark": "Ngitngit",
-        "footer": (
-            "Handcrafted nga footwear gikan sa Liliw, Laguna, "
-            "nga nagpasidungog sa Filipino nga pagkamamugnaon ug kahibalo."
-        )
-    }
-}
-
-
-def current_language():
-
-    language = request.args.get(
-        "lang",
-        session.get("language", "en")
-    )
-
-    if language not in TRANSLATIONS:
-        language = "en"
-
-    session["language"] = language
-
-    return language
-
-
-# ============================================================
-# PRIVACY-CONSCIOUS VISITOR ANALYTICS
-# ============================================================
-
-def hashed_ip():
-
-    ip = request.headers.get(
-        "X-Forwarded-For",
-        request.remote_addr or "unknown"
-    )
-
-    # Only use the first forwarded address.
-    ip = ip.split(",")[0].strip()
-
-    return hashlib.sha256(
-        f"{IP_HASH_SALT}:{ip}".encode()
-    ).hexdigest()[:32]
-
-
-def detect_device(user_agent):
-
-    ua = user_agent.lower()
-
-    if "ipad" in ua or "tablet" in ua:
-        return "Tablet"
-
-    if "iphone" in ua:
-        return "iPhone"
-
-    if "android" in ua:
-        return "Android"
-
-    if "windows" in ua:
-        return "Windows PC"
-
-    if "macintosh" in ua:
-        return "Mac"
-
-    if "linux" in ua:
-        return "Linux"
-
-    return "Unknown"
-
-
-def detect_browser(user_agent):
-
-    ua = user_agent.lower()
-
-    if "edg/" in ua:
-        return "Edge"
-
-    if "chrome/" in ua:
-        return "Chrome"
-
-    if "firefox/" in ua:
-        return "Firefox"
-
-    if "safari/" in ua:
-        return "Safari"
-
-    if "opera" in ua or "opr/" in ua:
-        return "Opera"
-
-    return "Unknown"
-
-
-def record_visitor():
-
-    user_agent = request.headers.get(
-        "User-Agent",
-        ""
-    )
-
-    connection = get_db()
-
-    connection.execute(
-        """
-        INSERT INTO visitors
-        (
-            ip_hash,
-            device,
-            browser,
-            language,
-            referrer,
-            visited_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            hashed_ip(),
-            detect_device(user_agent),
-            detect_browser(user_agent),
-            session.get("language", "en"),
-            request.referrer or "",
-            datetime.now(timezone.utc).isoformat()
-        )
-    )
-
-    connection.commit()
-    connection.close()
-
-
-# ============================================================
-# STAFF SECURITY
-# ============================================================
-
-def staff_required(function):
-
-    @wraps(function)
+def staff_required(func):
+    @wraps(func)
     def wrapper(*args, **kwargs):
-
-        if not session.get("staff"):
-            return redirect(
-                url_for("staff_login")
-            )
-
-        return function(*args, **kwargs)
+        if not session.get("staff_logged_in"):
+            return redirect(url_for("staff_login"))
+        return func(*args, **kwargs)
 
     return wrapper
 
 
-# ============================================================
-# STYLES
-# ============================================================
+def detect_device(user_agent):
+    ua = (user_agent or "").lower()
 
-STYLE = r"""
-<style>
+    if "mobile" in ua or "android" in ua or "iphone" in ua:
+        return "Mobile"
 
+    if "tablet" in ua or "ipad" in ua:
+        return "Tablet"
+
+    return "Desktop"
+
+
+def record_visitor():
+    # Do not store visitor information when staff is browsing the dashboard.
+    if session.get("staff_logged_in"):
+        return
+
+    user_agent = request.headers.get("User-Agent", "")
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr)
+
+    # If Render/proxy gives multiple forwarded IPs, use the first one.
+    if ip and "," in ip:
+        ip = ip.split(",")[0].strip()
+
+    device = detect_device(user_agent)
+    language = request.headers.get("Accept-Language", "")
+
+    conn = get_db()
+    conn.execute("""
+        INSERT INTO visitors
+        (ip, user_agent, device, language, visited_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        ip,
+        user_agent,
+        device,
+        language,
+        datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+    ))
+    conn.commit()
+    conn.close()
+
+
+# -------------------------------------------------------------------
+# STYLING
+# -------------------------------------------------------------------
+
+CSS = """
 :root {
-    --purple: #8b5cf6;
-    --purple2: #6d28d9;
-    --pink: #ec4899;
-    --orange: #f97316;
-    --blue: #06b6d4;
-
-    --background: #fbf8ff;
-    --surface: rgba(255,255,255,.92);
-    --surface2: #f5f0ff;
-
-    --text: #261338;
-    --muted: #77677f;
-
-    --border: rgba(124,58,237,.15);
-
-    --shadow:
-        0 20px 60px rgba(76,29,149,.13);
+    --bg: #f7f1e8;
+    --bg-secondary: #efe2d1;
+    --card: #fffaf3;
+    --brown: #a67c52;
+    --brown-dark: #6f4e37;
+    --brown-light: #c8a27a;
+    --text: #3e2c1c;
+    --muted: #796956;
+    --border: #decbb5;
+    --white: #ffffff;
+    --danger: #a94442;
+    --success: #537a55;
+    --shadow: 0 12px 35px rgba(92, 65, 42, 0.12);
 }
 
 body.dark {
-    --background: #0e0916;
-    --surface: #1b1125;
-    --surface2: #271735;
-
-    --text: #faf5ff;
-    --muted: #c1b2cb;
-
-    --border: rgba(196,181,253,.16);
-
-    --shadow:
-        0 25px 70px rgba(0,0,0,.4);
+    --bg: #211a15;
+    --bg-secondary: #2a211b;
+    --card: #30251e;
+    --brown: #c8a27a;
+    --brown-dark: #e0bc91;
+    --brown-light: #a67c52;
+    --text: #f6ecdf;
+    --muted: #c8b7a5;
+    --border: #574536;
+    --white: #ffffff;
+    --shadow: 0 12px 35px rgba(0,0,0,.3);
 }
 
 * {
@@ -536,26 +219,17 @@ html {
 
 body {
     margin: 0;
-
-    font-family:
-        Inter,
-        system-ui,
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        sans-serif;
-
-    background: var(--background);
+    font-family: Inter, Arial, Helvetica, sans-serif;
+    background:
+        radial-gradient(circle at top left, rgba(200,162,122,.18), transparent 30%),
+        var(--bg);
     color: var(--text);
-
-    transition:
-        background .3s,
-        color .3s;
+    transition: background .25s, color .25s;
 }
 
 a {
-    text-decoration: none;
     color: inherit;
+    text-decoration: none;
 }
 
 button,
@@ -569,2646 +243,1317 @@ button {
     cursor: pointer;
 }
 
-.container {
-    max-width: 1200px;
-    margin: auto;
-    padding: 0 22px;
-}
-
-/* NAV */
-
 .navbar {
     position: sticky;
     top: 0;
-    z-index: 1000;
-
-    backdrop-filter: blur(20px);
-
-    background: rgba(255,255,255,.78);
-
-    border-bottom:
-        1px solid var(--border);
+    z-index: 100;
+    backdrop-filter: blur(14px);
+    background: rgba(255,250,243,.88);
+    border-bottom: 1px solid var(--border);
 }
 
 body.dark .navbar {
-    background: rgba(14,9,22,.82);
+    background: rgba(33,26,21,.9);
 }
 
 .nav-inner {
     max-width: 1200px;
     margin: auto;
-
     padding: 14px 22px;
-
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 20px;
+}
 
-    gap: 18px;
+.logo-area {
+    display: flex;
+    align-items: center;
+    gap: 12px;
 }
 
 .logo {
-    font-size: 25px;
-    font-weight: 1000;
-
-    color: var(--purple2);
+    height: 54px;
+    width: auto;
+    object-fit: contain;
 }
 
-.logo span {
-    color: var(--pink);
+.brand-image {
+    max-width: 150px;
+    max-height: 48px;
+    object-fit: contain;
 }
 
 .nav-links {
     display: flex;
     align-items: center;
-
-    gap: 17px;
-
+    gap: 10px;
     flex-wrap: wrap;
 }
 
-.nav-links > a {
-    color: var(--muted);
-
-    font-weight: 800;
-}
-
-.nav-links > a:hover {
-    color: var(--purple);
-}
-
-.controls {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-}
-
-.language {
-    padding: 9px 11px;
-
-    border:
-        1px solid var(--border);
-
-    border-radius: 12px;
-
-    background: var(--surface);
+.nav-links a,
+.nav-button {
+    border: 0;
+    background: transparent;
     color: var(--text);
-
-    font-weight: 800;
+    padding: 9px 13px;
+    border-radius: 10px;
+    font-weight: 600;
 }
 
-.theme-btn {
-    width: 42px;
-    height: 42px;
-
-    border:
-        1px solid var(--border);
-
-    border-radius: 12px;
-
-    background: var(--surface);
-    color: var(--text);
-
-    font-size: 18px;
+.nav-links a:hover,
+.nav-button:hover {
+    background: var(--bg-secondary);
 }
 
-/* HERO */
+.container {
+    max-width: 1200px;
+    margin: auto;
+    padding: 30px 22px;
+}
 
 .hero {
-    padding: 28px 0 30px;
-}
-
-.hero-box {
-    min-height: 590px;
-
-    border-radius: 42px;
-
-    padding: 65px;
-
-    position: relative;
-    overflow: hidden;
-
-    color: white;
-
-    background:
-        radial-gradient(
-            circle at 80% 15%,
-            rgba(255,255,255,.28),
-            transparent 23%
-        ),
-
-        radial-gradient(
-            circle at 15% 90%,
-            rgba(249,115,22,.35),
-            transparent 28%
-        ),
-
-        linear-gradient(
-            135deg,
-            #32135c,
-            #7c3aed,
-            #db2777
-        );
-
-    box-shadow:
-        0 45px 100px rgba(76,29,149,.28);
+    min-height: 520px;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    padding: 70px 20px;
 }
 
 .hero-content {
-    max-width: 720px;
-
-    position: relative;
-    z-index: 2;
-}
-
-.hero-badge {
-    display: inline-block;
-
-    padding: 10px 16px;
-
-    border-radius: 999px;
-
-    background: rgba(255,255,255,.14);
-
-    border:
-        1px solid rgba(255,255,255,.25);
-
-    backdrop-filter: blur(12px);
-
-    font-weight: 900;
+    max-width: 800px;
 }
 
 .hero h1 {
-    margin: 25px 0 18px;
-
-    font-size:
-        clamp(
-            48px,
-            8vw,
-            86px
-        );
-
-    line-height: .92;
-
-    letter-spacing: -4px;
+    font-size: clamp(42px, 8vw, 78px);
+    line-height: .95;
+    margin: 15px 0;
+    color: var(--brown-dark);
 }
 
 .hero p {
-    max-width: 650px;
-
     font-size: 19px;
-
     line-height: 1.7;
-
-    color: #f7f3ff;
+    color: var(--muted);
 }
 
-.hero-buttons {
-    margin-top: 27px;
-
-    display: flex;
-    gap: 12px;
-
-    flex-wrap: wrap;
+.badge {
+    display: inline-block;
+    background: var(--brown-light);
+    color: #fff;
+    padding: 8px 15px;
+    border-radius: 999px;
+    font-weight: 700;
 }
-
-.hero-shoe {
-    position: absolute;
-
-    right: 7%;
-    bottom: 50px;
-
-    font-size: 180px;
-
-    transform: rotate(-15deg);
-
-    filter:
-        drop-shadow(
-            0 30px 25px rgba(0,0,0,.3)
-        );
-
-    animation:
-        floating 3.5s ease-in-out infinite;
-}
-
-@keyframes floating {
-
-    0%,100% {
-        transform:
-            rotate(-15deg)
-            translateY(0);
-    }
-
-    50% {
-        transform:
-            rotate(-7deg)
-            translateY(-22px);
-    }
-}
-
-/* BUTTONS */
 
 .btn {
+    display: inline-block;
     border: 0;
-
-    border-radius: 14px;
-
-    padding: 12px 19px;
-
-    display: inline-flex;
-    justify-content: center;
-    align-items: center;
-
-    font-weight: 900;
-
-    transition:
-        transform .2s,
-        box-shadow .2s;
+    padding: 12px 20px;
+    border-radius: 12px;
+    background: var(--brown);
+    color: white;
+    font-weight: 700;
+    box-shadow: var(--shadow);
+    transition: transform .15s, opacity .15s;
 }
 
 .btn:hover {
-    transform: translateY(-3px);
+    transform: translateY(-2px);
+    opacity: .92;
 }
 
-.btn-purple {
-    color: white;
-
-    background:
-        linear-gradient(
-            135deg,
-            var(--purple),
-            var(--purple2)
-        );
-
-    box-shadow:
-        0 12px 30px rgba(124,58,237,.25);
+.btn.secondary {
+    background: var(--brown-dark);
 }
 
-.btn-white {
-    background: white;
-    color: var(--purple2);
+.btn.danger {
+    background: var(--danger);
 }
-
-.btn-light {
-    background: var(--surface2);
-    color: var(--purple2);
-}
-
-/* SECTIONS */
 
 .section {
-    padding: 70px 0;
+    padding: 55px 0;
 }
 
 .section-title {
-    margin: 0 0 12px;
-
-    font-size: 39px;
-
-    letter-spacing: -1px;
-}
-
-.section-subtitle {
-    max-width: 760px;
-
+    text-align: center;
     margin-bottom: 30px;
+}
 
+.section-title h2 {
+    font-size: 34px;
+    margin-bottom: 8px;
+    color: var(--brown-dark);
+}
+
+.section-title p {
     color: var(--muted);
-
-    line-height: 1.75;
-}
-
-/* ABOUT */
-
-.about-grid {
-    display: grid;
-
-    grid-template-columns:
-        repeat(
-            auto-fit,
-            minmax(270px,1fr)
-        );
-
-    gap: 22px;
-}
-
-.about-card {
-    padding: 30px;
-
-    border:
-        1px solid var(--border);
-
-    border-radius: 25px;
-
-    background: var(--surface);
-
-    box-shadow: var(--shadow);
-
-    line-height: 1.75;
-}
-
-.about-card h3 {
-    color: var(--purple);
-
-    margin-top: 0;
-}
-
-/* PRODUCTS */
-
-.product-toolbar {
-    margin-bottom: 25px;
-
-    display: flex;
-
-    gap: 10px;
-
-    flex-wrap: wrap;
-}
-
-.search-box {
-    flex: 1;
-
-    min-width: 230px;
-
-    padding: 13px 16px;
-
-    border:
-        1px solid var(--border);
-
-    border-radius: 14px;
-
-    background: var(--surface);
-
-    color: var(--text);
-
-    outline: none;
 }
 
 .products {
     display: grid;
-
-    grid-template-columns:
-        repeat(
-            auto-fit,
-            minmax(245px,1fr)
-        );
-
-    gap: 23px;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 22px;
 }
 
-.product-card {
+.product {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
     overflow: hidden;
-
-    border-radius: 26px;
-
-    border:
-        1px solid var(--border);
-
-    background: var(--surface);
-
     box-shadow: var(--shadow);
-
-    transition:
-        transform .25s,
-        box-shadow .25s;
+    transition: transform .2s;
 }
 
-.product-card:hover {
-    transform:
-        translateY(-9px)
-        rotate(.2deg);
-
-    box-shadow:
-        0 30px 70px rgba(76,29,149,.2);
+.product:hover {
+    transform: translateY(-6px);
 }
 
 .product-image {
-    height: 235px;
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    overflow: hidden;
-
-    background:
-        linear-gradient(
-            135deg,
-            #ede9fe,
-            #fce7f3,
-            #dbeafe
-        );
-}
-
-.product-image img {
     width: 100%;
-    height: 100%;
-
+    height: 210px;
     object-fit: cover;
-
-    transition:
-        transform .4s;
+    background: var(--bg-secondary);
 }
 
-.product-card:hover
-.product-image img {
-    transform: scale(1.06);
-}
-
-.slipper {
-    font-size: 90px;
-
-    transform: rotate(-15deg);
-
-    animation:
-        slipperFloat 3s ease-in-out infinite;
-}
-
-@keyframes slipperFloat {
-
-    0%,100% {
-        transform:
-            rotate(-15deg)
-            translateY(0);
-    }
-
-    50% {
-        transform:
-            rotate(-9deg)
-            translateY(-8px);
-    }
+.product-placeholder {
+    height: 210px;
+    display: grid;
+    place-items: center;
+    background:
+        linear-gradient(135deg, var(--bg-secondary), var(--card));
+    color: var(--brown);
+    font-size: 54px;
 }
 
 .product-body {
-    padding: 23px;
+    padding: 20px;
 }
 
-.product-body h3 {
-    margin: 0 0 8px;
-
-    font-size: 21px;
-}
-
-.description {
-    min-height: 58px;
-
-    color: var(--muted);
-
-    line-height: 1.55;
+.product h3 {
+    margin-top: 0;
 }
 
 .price {
-    margin-top: 14px;
-
-    font-size: 25px;
-
-    font-weight: 1000;
-
-    color: var(--purple);
-}
-
-.product-info {
-    margin-top: 7px;
-
-    color: var(--muted);
-
-    font-size: 14px;
+    color: var(--brown-dark);
+    font-size: 22px;
+    font-weight: 800;
 }
 
 .stock {
-    margin-top: 12px;
-
-    font-size: 13px;
-
-    font-weight: 950;
+    color: var(--muted);
+    margin: 8px 0 15px;
 }
 
-.good {
-    color: #16a34a;
+.about-box {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    padding: 30px;
+    box-shadow: var(--shadow);
+    line-height: 1.8;
 }
 
-.low {
-    color: #ca8a04;
+.about-box h3 {
+    color: var(--brown-dark);
 }
-
-.out {
-    color: #dc2626;
-}
-
-/* FOOTER */
 
 .footer {
-    margin-top: 40px;
-
-    padding:
-        65px
-        22px
-        30px;
-
-    color: #ded4e9;
-
-    background:
-        linear-gradient(
-            135deg,
-            #211036,
-            #3b176d,
-            #551b4f
-        );
+    margin-top: 70px;
+    padding: 45px 22px;
+    background: var(--brown-dark);
+    color: #fff;
 }
 
 .footer-inner {
     max-width: 1200px;
-
     margin: auto;
-
     display: grid;
-
-    grid-template-columns:
-        repeat(
-            auto-fit,
-            minmax(250px,1fr)
-        );
-
-    gap: 40px;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 30px;
 }
 
 .footer h3 {
-    color: white;
+    color: #f1d4b1;
 }
 
 .footer p {
+    color: #eadbca;
     line-height: 1.7;
 }
 
-.footer-bottom {
-    max-width: 1200px;
-
-    margin: 35px auto 0;
-
-    padding-top: 20px;
-
-    border-top:
-        1px solid rgba(255,255,255,.14);
-
-    font-size: 13px;
-}
-
-/* LOGIN */
-
-.login-wrap {
-    min-height: 80vh;
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    padding: 50px 20px;
-}
-
-.login-card {
-    width: 100%;
-    max-width: 440px;
-
-    padding: 35px;
-
-    border-radius: 27px;
-
-    border:
-        1px solid var(--border);
-
-    background: var(--surface);
-
+.form-card {
+    max-width: 700px;
+    margin: 40px auto;
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 30px;
+    border-radius: 20px;
     box-shadow: var(--shadow);
-}
-
-/* DASHBOARD */
-
-.dashboard {
-    padding: 45px 0 80px;
-}
-
-.stats {
-    display: grid;
-
-    grid-template-columns:
-        repeat(
-            auto-fit,
-            minmax(180px,1fr)
-        );
-
-    gap: 15px;
-
-    margin: 30px 0;
-}
-
-.stat {
-    padding: 24px;
-
-    border:
-        1px solid var(--border);
-
-    border-radius: 22px;
-
-    background: var(--surface);
-
-    box-shadow: var(--shadow);
-}
-
-.stat-number {
-    font-size: 35px;
-
-    font-weight: 1000;
-
-    color: var(--purple);
-}
-
-.stat-label {
-    color: var(--muted);
-}
-
-.panel {
-    padding: 27px;
-
-    margin-bottom: 25px;
-
-    border:
-        1px solid var(--border);
-
-    border-radius: 24px;
-
-    background: var(--surface);
-
-    box-shadow: var(--shadow);
-}
-
-.grid-form {
-    display: grid;
-
-    grid-template-columns:
-        repeat(
-            auto-fit,
-            minmax(180px,1fr)
-        );
-
-    gap: 15px;
-}
-
-.full {
-    grid-column: 1 / -1;
 }
 
 .form-group {
-    margin-bottom: 5px;
+    margin-bottom: 17px;
 }
 
 .form-group label {
     display: block;
-
     margin-bottom: 7px;
-
-    font-weight: 850;
+    font-weight: 700;
 }
 
 .form-group input,
 .form-group textarea,
 .form-group select {
     width: 100%;
-
+    border: 1px solid var(--border);
+    border-radius: 10px;
     padding: 12px;
-
-    border:
-        1px solid var(--border);
-
-    border-radius: 11px;
-
-    background: var(--surface);
-
+    background: var(--bg);
     color: var(--text);
-
     outline: none;
 }
 
 .form-group textarea {
-    min-height: 90px;
-
+    min-height: 110px;
     resize: vertical;
 }
 
-.product-editor {
-    margin-top: 16px;
+.flash {
+    max-width: 1200px;
+    margin: 20px auto;
+    padding: 13px 18px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+}
 
-    padding: 21px;
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 18px;
+    margin-bottom: 30px;
+}
 
+.stat {
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: 18px;
+    padding: 24px;
+    box-shadow: var(--shadow);
+}
 
-    border:
-        1px solid var(--border);
-
-    background:
-        rgba(139,92,246,.04);
+.stat-number {
+    font-size: 35px;
+    font-weight: 900;
+    color: var(--brown);
 }
 
 .table-wrap {
     overflow-x: auto;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
 }
 
 table {
     width: 100%;
-
-    min-width: 750px;
-
     border-collapse: collapse;
 }
 
 th,
 td {
-    padding: 12px;
-
+    padding: 14px;
     text-align: left;
-
-    border-bottom:
-        1px solid var(--border);
-
-    font-size: 13px;
+    border-bottom: 1px solid var(--border);
 }
 
 th {
-    color: var(--purple);
+    background: var(--bg-secondary);
 }
 
-.alert {
-    max-width: 1200px;
-
-    margin: 15px auto;
-
-    padding: 13px 18px;
-
-    border-radius: 13px;
-
-    background: #ede9fe;
-
-    color: #4c1d95;
-}
-
-body.dark .alert {
-    background: #2c1d3e;
-    color: #ddd6fe;
-}
-
-/* MOBILE */
-
-@media(max-width: 850px) {
-
+@media (max-width: 700px) {
     .nav-inner {
         flex-direction: column;
     }
 
-    .nav-links {
-        justify-content: center;
-    }
-
-    .hero-box {
-        min-height: 590px;
-
-        padding: 40px 25px;
+    .hero {
+        min-height: 430px;
     }
 
     .hero h1 {
-        font-size: 52px;
-    }
-
-    .hero-shoe {
-        right: 4%;
-        bottom: 15px;
-
-        opacity: .28;
-
-        font-size: 140px;
+        font-size: 48px;
     }
 }
-
-</style>
 """
 
 
-# ============================================================
-# HOME HTML
-# ============================================================
+# -------------------------------------------------------------------
+# MAIN PAGE
+# -------------------------------------------------------------------
 
-HOME_HTML = """
+PAGE = """
 <!doctype html>
-
 <html lang="en">
-
 <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
 
-<meta charset="UTF-8">
+    <title>{{ store_name }}</title>
 
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
->
-
-<title>
-    PADRON | Filipino Footwear
-</title>
-
-{{ style|safe }}
-
-</head>
-
-<body id="page">
-
-<nav class="navbar">
-
-<div class="nav-inner">
-
-<a class="logo" href="/">
-    PADRON<span>●</span>
-</a>
-
-<div class="nav-links">
-
-<a href="#about">
-    {{ t.about }}
-</a>
-
-<a href="#products">
-    {{ t.products }}
-</a>
-
-<a href="#mission">
-    {{ t.mission }}
-</a>
-
-<a href="#vision">
-    {{ t.vision }}
-</a>
-
-<a href="#contact">
-    {{ t.contact }}
-</a>
-
-<a href="/staff/login">
-    {{ t.staff }}
-</a>
-
-<div class="controls">
-
-<select
-    class="language"
-    onchange="changeLanguage(this.value)"
->
-
-<option
-    value="en"
-    {% if language == "en" %}selected{% endif %}
->
-🇬🇧 English
-</option>
-
-<option
-    value="fil"
-    {% if language == "fil" %}selected{% endif %}
->
-🇵🇭 Filipino
-</option>
-
-<option
-    value="ceb"
-    {% if language == "ceb" %}selected{% endif %}
->
-🟦 Cebuano
-</option>
-
-</select>
-
-<button
-    class="theme-btn"
-    onclick="toggleTheme()"
-    id="themeButton"
-    title="{{ t.theme }}"
->
-🌙
-</button>
-
-</div>
-
-</div>
-
-</div>
-
-</nav>
-
-
-{% with messages = get_flashed_messages() %}
-
-{% for message in messages %}
-
-<div class="alert">
-    {{ message }}
-</div>
-
-{% endfor %}
-
-{% endwith %}
-
-
-<section class="hero">
-
-<div class="container">
-
-<div class="hero-box">
-
-<div class="hero-content">
-
-<div class="hero-badge">
-    {{ t.hero_badge }}
-</div>
-
-<h1>
-    {{ t.hero_title }}
-</h1>
-
-<p>
-    {{ t.hero_text }}
-</p>
-
-<div class="hero-buttons">
-
-<a
-    class="btn btn-white"
-    href="#products"
->
-    {{ t.explore }} →
-</a>
-
-<a
-    class="btn"
-    href="#about"
-    style="
-        color:white;
-        background:rgba(255,255,255,.14);
-        border:1px solid rgba(255,255,255,.25);
-    "
->
-    {{ t.about }}
-</a>
-
-</div>
-
-</div>
-
-<div class="hero-shoe">
-    👡
-</div>
-
-</div>
-
-</div>
-
-</section>
-
-
-<section
-    class="section"
-    id="about"
->
-
-<div class="container">
-
-<h2 class="section-title">
-    {{ t.about }}
-</h2>
-
-<p class="section-subtitle">
-    A family tradition of footwear making rooted
-    in Liliw, Laguna.
-</p>
-
-<div class="about-grid">
-
-<div class="about-card">
-
-<h3>
-    {{ t.story }}
-</h3>
-
-<p>
-    Golden Zapatillas Corporation is a
-    family-owned business established in 2015,
-    continuing a family tradition of manufacturing
-    high-quality footwear in Liliw, Laguna.
-</p>
-
-<p>
-    Our goal is to create pairs of shoes that
-    showcase the creativity and craftsmanship of
-    our artisans: artist painters, beadworkers,
-    embroiderers, and shoemakers from Laguna.
-</p>
-
-</div>
-
-
-<div class="about-card">
-
-<h3>
-    {{ t.materials }}
-</h3>
-
-<p>
-    We use locally sourced materials like abaca
-    and indigenous fabrics such as Ifugao fabric
-    and Inabel to support local suppliers and
-    create a Filipino touch in footwear that is
-    world-class in quality and durability.
-</p>
-
-</div>
-
-
-<div class="about-card">
-
-<h3>
-    {{ t.heritage }}
-</h3>
-
-<p>
-    Padron is the brand name we are known for.
-    The name means "pattern" in Spanish because
-    every footwear design begins by creating a
-    padron or pattern.
-</p>
-
-<p>
-    We believe Padron will carry our family
-    tradition forward for another 60 years or
-    more in the footwear industry.
-</p>
-
-</div>
-
-</div>
-
-</div>
-
-</section>
-
-
-<section
-    class="section"
-    id="products"
->
-
-<div class="container">
-
-<h2 class="section-title">
-    {{ t.products }}
-</h2>
-
-<p class="section-subtitle">
-    Explore handmade mules, flats, platform
-    espadrilles, wedge espadrilles, and the
-    Estela interchangeable strap.
-</p>
-
-<div class="product-toolbar">
-
-<input
-    id="search"
-    class="search-box"
-    placeholder="🔎 Search footwear..."
-    oninput="filterProducts()"
->
-
-</div>
-
-<div
-    class="products"
-    id="productGrid"
->
-
-{% for product in products %}
-
-<article
-    class="product-card"
-    data-name="{{ product['name']|lower }}"
->
-
-<div class="product-image">
-
-{% if product["image_url"] %}
-
-<img
-    src="{{ product['image_url'] }}"
-    alt="{{ product['name'] }}"
-    loading="lazy"
->
-
-{% else %}
-
-<div class="slipper">
-    👡
-</div>
-
-{% endif %}
-
-</div>
-
-<div class="product-body">
-
-<h3>
-    {{ product["name"] }}
-</h3>
-
-<div class="description">
-    {{ product["description"] }}
-</div>
-
-{% if product["price"] > 0 %}
-
-<div class="price">
-    ₱{{ "%.2f"|format(product["price"]) }}
-</div>
-
-{% endif %}
-
-<div class="product-info">
-
-<strong>{{ t.color }}:</strong>
-
-{{ product["color"] or "Various" }}
-
-</div>
-
-<div class="product-info">
-
-<strong>{{ t.sizes }}:</strong>
-
-{{ product["sizes"] or "Various" }}
-
-</div>
-
-
-{% if product["stock"] <= 0 %}
-
-<div class="stock out">
-    {{ t.out_stock }}
-</div>
-
-{% elif product["stock"] <= 5 %}
-
-<div class="stock low">
-    {{ t.only_left.format(count=product["stock"]) }}
-</div>
-
-{% else %}
-
-<div class="stock good">
-    ✓ {{ t.in_stock }}
-</div>
-
-{% endif %}
-
-</div>
-
-</article>
-
-{% endfor %}
-
-</div>
-
-</div>
-
-</section>
-
-
-<section
-    class="section"
-    id="mission"
->
-
-<div class="container">
-
-<div class="about-card">
-
-<h2 class="section-title">
-    {{ t.mission_title }}
-</h2>
-
-<p>
-    To empower Filipino artisans, including
-    shoemakers and women artisans skilled in
-    handpainting, embroidery, and crochet, by
-    creating sustainable, high-quality footwear
-    that celebrates local heritage and
-    craftsmanship.
-</p>
-
-<p>
-    We strive to foster economic growth in
-    Liliw while preserving our family's legacy
-    of footwear making, established in 1963.
-</p>
-
-</div>
-
-</div>
-
-</section>
-
-
-<section
-    class="section"
-    id="vision"
->
-
-<div class="container">
-
-<div class="about-card">
-
-<h2 class="section-title">
-    {{ t.vision_title }}
-</h2>
-
-<p>
-    To be one of the leading pioneers in
-    sustainable, handcrafted footwear,
-    incorporating the expertise of shoemakers
-    and women artisans skilled in handpainting,
-    embroidery, and crochet.
-</p>
-
-<p>
-    We aim to inspire a new generation of
-    artisans, preserve our family's legacy,
-    and position Liliw as a center of footwear
-    excellence.
-</p>
-
-</div>
-
-</div>
-
-</section>
-
-
-<footer
-    class="footer"
-    id="contact"
->
-
-<div class="footer-inner">
-
-<div>
-
-<h3>
-    PADRON
-</h3>
-
-<p>
-    {{ t.footer }}
-</p>
-
-</div>
-
-
-<div>
-
-<h3>
-    {{ t.contact_title }}
-</h3>
-
-<p>
-    📍 {{ store_address }}
-</p>
-
-<p>
-    📱 {{ store_phone }}
-</p>
-
-{% if store_email %}
-
-<p>
-    ✉️ {{ store_email }}
-</p>
-
-{% endif %}
-
-</div>
-
-
-<div>
-
-<h3>
-    {{ t.heritage }}
-</h3>
-
-<p>
-    Family footwear tradition since 1963.
-</p>
-
-<p>
-    Liliw, Laguna, Philippines 🇵🇭
-</p>
-
-</div>
-
-</div>
-
-
-<div class="footer-bottom">
-
-© {{ year }} PADRON / Golden Zapatillas Corporation
-
-<br><br>
-
-All rights reserved.
-
-</div>
-
-</footer>
-
-
-<script>
-
-function changeLanguage(language) {
-
-    const url =
-        new URL(
-            window.location.href
-        );
-
-    url.searchParams.set(
-        "lang",
-        language
-    );
-
-    window.location.href =
-        url.toString();
-}
-
-
-function setTheme(theme) {
-
-    const page =
-        document.getElementById("page");
-
-    const button =
-        document.getElementById("themeButton");
-
-    if (theme === "dark") {
-
-        page.classList.add("dark");
-
-        button.textContent = "☀️";
-
-    } else {
-
-        page.classList.remove("dark");
-
-        button.textContent = "🌙";
-    }
-
-    localStorage.setItem(
-        "padron-theme",
-        theme
-    );
-}
-
-
-function toggleTheme() {
-
-    const current =
-        localStorage.getItem(
-            "padron-theme"
-        ) || "light";
-
-    setTheme(
-        current === "dark"
-            ? "light"
-            : "dark"
-    );
-}
-
-
-function filterProducts() {
-
-    const search =
-        document
-            .getElementById("search")
-            .value
-            .toLowerCase();
-
-    const cards =
-        document.querySelectorAll(
-            ".product-card"
-        );
-
-    cards.forEach(
-        function(card) {
-
-            const name =
-                card.dataset.name;
-
-            card.style.display =
-                name.includes(search)
-                    ? ""
-                    : "none";
-        }
-    );
-}
-
-
-(function() {
-
-    const saved =
-        localStorage.getItem(
-            "padron-theme"
-        ) || "light";
-
-    setTheme(saved);
-
-})();
-
-</script>
-
-</body>
-
-</html>
-"""
-
-
-# ============================================================
-# LOGIN HTML
-# ============================================================
-
-LOGIN_HTML = """
-<!doctype html>
-
-<html>
-
-<head>
-
-<meta charset="UTF-8">
-
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1"
->
-
-<title>
-    Staff Login | PADRON
-</title>
-
-{{ style|safe }}
-
+    <style>{{ css|safe }}</style>
 </head>
 
 <body>
 
 <nav class="navbar">
+    <div class="nav-inner">
 
-<div class="nav-inner">
+        <div class="logo-area">
+            <img
+                class="logo"
+                src="{{ url_for('static', filename='image0 (3)') }}"
+                alt="Logo"
+                onerror="this.style.display='none'"
+            >
 
-<a class="logo" href="/">
-    PADRON
-</a>
+            <img
+                class="brand-image"
+                src="{{ url_for('static', filename='image1') }}"
+                alt="{{ store_name }}"
+                onerror="this.style.display='none'"
+            >
+        </div>
 
-<a href="/">
-    ← Store
-</a>
+        <div class="nav-links">
+            <a href="#home" data-en="Home" data-fil="Home">Home</a>
+            <a href="#products" data-en="Products" data-fil="Mga Produkto">Products</a>
+            <a href="#about" data-en="About Us" data-fil="Tungkol sa Amin">About Us</a>
+            <a href="#contact" data-en="Contact" data-fil="Kontak">Contact</a>
 
-</div>
+            <button class="nav-button" onclick="toggleLanguage()">
+                <span id="languageLabel">FIL</span>
+            </button>
 
+            <button class="nav-button" onclick="toggleTheme()">
+                ☀️ / 🌙
+            </button>
+
+            <a href="{{ url_for('staff_login') }}">Staff</a>
+        </div>
+
+    </div>
 </nav>
 
-
-<div class="login-wrap">
-
-<div class="login-card">
-
-<h1>
-    🔐 Staff Login
-</h1>
-
-<p style="color:var(--muted)">
-    Manage products and inventory.
-</p>
 
 {% with messages = get_flashed_messages() %}
-
-{% for message in messages %}
-
-<div class="alert">
-    {{ message }}
-</div>
-
-{% endfor %}
-
+    {% if messages %}
+        {% for message in messages %}
+            <div class="flash">{{ message }}</div>
+        {% endfor %}
+    {% endif %}
 {% endwith %}
 
-<form method="POST">
 
-<div class="form-group">
+<main>
 
-<label>
-    Staff Password
-</label>
+<section class="hero" id="home">
+    <div class="hero-content">
 
-<input
-    type="password"
-    name="password"
-    required
-    autofocus
->
+        <span class="badge"
+              data-en="Handcrafted Filipino Footwear"
+              data-fil="Gawang Pilipinong Sapatos">
+            Handcrafted Filipino Footwear
+        </span>
 
-</div>
+        <h1>{{ store_name }}</h1>
 
-<button
-    class="btn btn-purple"
-    style="width:100%"
-    type="submit"
->
-    Sign In
-</button>
+        <p
+            data-en="Beautiful, comfortable and proudly Filipino footwear."
+            data-fil="Maganda, komportable at ipinagmamalaking gawang Pilipino na sapatos."
+        >
+            Beautiful, comfortable and proudly Filipino footwear.
+        </p>
 
-</form>
+        <a class="btn" href="#products"
+           data-en="Explore Products"
+           data-fil="Tingnan ang Mga Produkto">
+            Explore Products
+        </a>
 
-</div>
-
-</div>
-
-</body>
-
-</html>
-"""
-
-
-# ============================================================
-# DASHBOARD HTML
-# ============================================================
-
-DASHBOARD_HTML = """
-<!doctype html>
-
-<html>
-
-<head>
-
-<meta charset="UTF-8">
-
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1"
->
-
-<title>
-    Staff Dashboard | PADRON
-</title>
-
-{{ style|safe }}
-
-</head>
-
-<body id="dashboardBody">
-
-<nav class="navbar">
-
-<div class="nav-inner">
-
-<a class="logo" href="/">
-    PADRON
-</a>
-
-<div class="nav-links">
-
-<a href="/" target="_blank">
-    View Store
-</a>
-
-<a
-    class="btn btn-light"
-    href="/staff/logout"
->
-    Logout
-</a>
-
-<button
-    class="theme-btn"
-    onclick="toggleTheme()"
-    id="themeButton"
->
-🌙
-</button>
-
-</div>
-
-</div>
-
-</nav>
-
-
-<main class="dashboard">
-
-<div class="container">
-
-<h1>
-    Staff Dashboard
-</h1>
-
-<p style="color:var(--muted)">
-    Manage products, inventory, and website analytics.
-</p>
-
-
-<div class="stats">
-
-<div class="stat">
-
-<div class="stat-number">
-    {{ total_visitors }}
-</div>
-
-<div class="stat-label">
-    Page Views
-</div>
-
-</div>
-
-
-<div class="stat">
-
-<div class="stat-number">
-    {{ product_count }}
-</div>
-
-<div class="stat-label">
-    Products
-</div>
-
-</div>
-
-
-<div class="stat">
-
-<div class="stat-number">
-    {{ total_stock }}
-</div>
-
-<div class="stat-label">
-    Total Stock
-</div>
-
-</div>
-
-</div>
-
-
-<section class="panel">
-
-<h2>
-    ➕ Add Product
-</h2>
-
-<form
-    method="POST"
-    action="/staff/product/new"
->
-
-<div class="grid-form">
-
-<div class="form-group">
-
-<label>
-    Product Name
-</label>
-
-<input
-    name="name"
-    required
->
-
-</div>
-
-<div class="form-group">
-
-<label>
-    Price ₱
-</label>
-
-<input
-    name="price"
-    type="number"
-    min="0"
-    step="0.01"
->
-
-</div>
-
-<div class="form-group">
-
-<label>
-    Stock
-</label>
-
-<input
-    name="stock"
-    type="number"
-    min="0"
->
-
-</div>
-
-<div class="form-group">
-
-<label>
-    Color
-</label>
-
-<input name="color">
-
-</div>
-
-<div class="form-group">
-
-<label>
-    Sizes
-</label>
-
-<input
-    name="sizes"
-    placeholder="36, 37, 38, 39, 40"
->
-
-</div>
-
-<div class="form-group">
-
-<label>
-    Image
-</label>
-
-<select name="image_url">
-
-<option value="{{ image_0 }}">
-    Image 0
-</option>
-
-<option value="{{ image_1 }}">
-    Image 1
-</option>
-
-</select>
-
-</div>
-
-<div class="form-group full">
-
-<label>
-    Description
-</label>
-
-<textarea
-    name="description"
-></textarea>
-
-</div>
-
-</div>
-
-<button
-    class="btn btn-purple"
-    type="submit"
->
-    Add Product
-</button>
-
-</form>
-
+    </div>
 </section>
 
 
-<section class="panel">
+<section class="section" id="products">
+    <div class="container">
 
-<h2>
-    📦 Manage Products
-</h2>
+        <div class="section-title">
+            <h2 data-en="Our Products" data-fil="Mga Produkto">
+                Our Products
+            </h2>
 
-{% for product in products %}
+            <p
+                data-en="Browse our available footwear collection."
+                data-fil="Tingnan ang aming mga available na footwear."
+            >
+                Browse our available footwear collection.
+            </p>
+        </div>
 
-<div class="product-editor">
+        <div class="products">
 
-<form
-    method="POST"
-    action="/staff/product/{{ product['id'] }}/update"
->
+            {% for product in products %}
 
-<div class="grid-form">
+            <article class="product">
 
-<div class="form-group">
+                {% if product["image"] %}
+                    <img
+                        class="product-image"
+                        src="{{ product['image'] }}"
+                        alt="{{ product['name'] }}"
+                    >
+                {% else %}
+                    <div class="product-placeholder">
+                        🥿
+                    </div>
+                {% endif %}
 
-<label>
-    Product Name
-</label>
+                <div class="product-body">
 
-<input
-    name="name"
-    value="{{ product['name'] }}"
-    required
->
+                    <h3>{{ product["name"] }}</h3>
 
-</div>
+                    <p>{{ product["description"] }}</p>
 
-<div class="form-group">
+                    <div class="price">
+                        ₱{{ "%.2f"|format(product["price"]) }}
+                    </div>
 
-<label>
-    Price ₱
-</label>
+                    <div class="stock">
+                        {% if product["stock"] > 0 %}
+                            <span
+                                data-en="{{ product['stock'] }} in stock"
+                                data-fil="{{ product['stock'] }} available"
+                            >
+                                {{ product["stock"] }} in stock
+                            </span>
+                        {% else %}
+                            <span
+                                data-en="Out of stock"
+                                data-fil="Walang stock"
+                            >
+                                Out of stock
+                            </span>
+                        {% endif %}
+                    </div>
 
-<input
-    name="price"
-    type="number"
-    min="0"
-    step="0.01"
-    value="{{ product['price'] }}"
->
+                </div>
 
-</div>
+            </article>
 
-<div class="form-group">
+            {% endfor %}
 
-<label>
-    Stock
-</label>
-
-<input
-    name="stock"
-    type="number"
-    min="0"
-    value="{{ product['stock'] }}"
->
-
-</div>
-
-<div class="form-group">
-
-<label>
-    Color
-</label>
-
-<input
-    name="color"
-    value="{{ product['color'] }}"
->
-
-</div>
-
-<div class="form-group">
-
-<label>
-    Sizes
-</label>
-
-<input
-    name="sizes"
-    value="{{ product['sizes'] }}"
->
-
-</div>
-
-<div class="form-group">
-
-<label>
-    Image
-</label>
-
-<select name="image_url">
-
-<option
-    value="{{ image_0 }}"
-    {% if product['image_url'] == image_0 %}
-    selected
-    {% endif %}
->
-Image 0
-</option>
-
-<option
-    value="{{ image_1 }}"
-    {% if product['image_url'] == image_1 %}
-    selected
-    {% endif %}
->
-Image 1
-</option>
-
-</select>
-
-</div>
-
-<div class="form-group">
-
-<label>
-    Visibility
-</label>
-
-<select name="active">
-
-<option
-    value="1"
-    {% if product['active'] %}
-    selected
-    {% endif %}
->
-Visible
-</option>
-
-<option
-    value="0"
-    {% if not product['active'] %}
-    selected
-    {% endif %}
->
-Hidden
-</option>
-
-</select>
-
-</div>
-
-<div class="form-group full">
-
-<label>
-    Description
-</label>
-
-<textarea name="description">{{ product['description'] }}</textarea>
-
-</div>
-
-</div>
-
-<button
-    class="btn btn-purple"
-    type="submit"
->
-    Save Changes
-</button>
-
-</form>
-
-
-<form
-    method="POST"
-    action="/staff/product/{{ product['id'] }}/delete"
-    style="margin-top:10px"
-    onsubmit="return confirm('Delete this product?');"
->
-
-<button
-    class="btn"
-    style="
-        background:#fee2e2;
-        color:#dc2626;
-    "
->
-    Delete Product
-</button>
-
-</form>
-
-</div>
-
-{% endfor %}
-
+        </div>
+    </div>
 </section>
 
 
-<section class="panel">
+<section class="section" id="about">
+    <div class="container">
 
-<h2>
-    📊 Visitor Analytics
-</h2>
+        <div class="section-title">
+            <h2 data-en="About Us" data-fil="Tungkol sa Amin">
+                About Us
+            </h2>
+        </div>
 
-<p style="color:var(--muted)">
-    IP addresses are stored as one-way hashes
-    rather than readable IP addresses.
-</p>
+        <div class="about-box">
 
-<div class="table-wrap">
+            <h3>Golden Zapatillas Corporation</h3>
 
-<table>
+            <p>
+                Golden Zapatillas Corporation is a family-owned business
+                established in 2015, continuing a family tradition of
+                manufacturing high-quality footwear in Liliw, Laguna.
+            </p>
 
-<thead>
+            <p>
+                Our main goal is to create pairs of shoes that showcase
+                the creativity and craftsmanship of our artisans:
+                artist painters, beadworkers, embroiderers and shoemakers
+                from Laguna.
+            </p>
 
-<tr>
-<th>ID</th>
-<th>IP Hash</th>
-<th>Device</th>
-<th>Browser</th>
-<th>Language</th>
-<th>Referrer</th>
-<th>Visited</th>
-</tr>
+            <p>
+                We use locally sourced materials like abaca and indigenous
+                fabrics such as Ifugao fabric and Inabel to support local
+                suppliers and create a Filipino touch in footwear that is
+                world-class in quality and durability.
+            </p>
 
-</thead>
+            <h3>Padron</h3>
 
-<tbody>
+            <p>
+                Padron is the brand name we are known for. The name means
+                "pattern" in Spanish because every footwear design starts
+                with creating a padron or pattern.
+            </p>
 
-{% for visitor in visitors %}
+            <h3 data-en="Our Products" data-fil="Mga Produkto">
+                Our Products
+            </h3>
 
-<tr>
+            <p>
+                Padron is committed to quality, heritage, sustainability
+                and women empowerment. We offer handmade mules, flats,
+                platforms and wedge espadrilles showcasing the skills of
+                Laguna artisans.
+            </p>
 
-<td>
-    #{{ visitor["id"] }}
-</td>
+            <p>
+                We use materials such as abaca, Ifugao fabric and Inabel
+                to support local suppliers. We continually innovate our
+                designs, including the Estela interchangeable strap.
+            </p>
 
-<td>
-    {{ visitor["ip_hash"] }}
-</td>
+            <h3>Mission</h3>
 
-<td>
-    {{ visitor["device"] }}
-</td>
+            <p>
+                To empower Filipino artisans, including shoemakers and
+                women artisans skilled in handpainting, embroidery and
+                crochet, by creating sustainable, high-quality footwear
+                that celebrates local heritage and craftsmanship.
+            </p>
 
-<td>
-    {{ visitor["browser"] }}
-</td>
+            <h3>Vision</h3>
 
-<td>
-    {{ visitor["language"] }}
-</td>
+            <p>
+                To be one of the leading pioneers in sustainable,
+                handcrafted footwear, incorporating the expertise of
+                shoemakers and women artisans while preserving the
+                family's legacy and positioning Liliw as a center of
+                footwear excellence.
+            </p>
 
-<td>
-    {{ visitor["referrer"] or "-" }}
-</td>
+        </div>
 
-<td>
-    {{ visitor["visited_at"] }}
-</td>
-
-</tr>
-
-{% else %}
-
-<tr>
-
-<td colspan="7">
-    No visitors yet.
-</td>
-
-</tr>
-
-{% endfor %}
-
-</tbody>
-
-</table>
-
-</div>
-
+    </div>
 </section>
-
-</div>
 
 </main>
 
 
+<footer class="footer" id="contact">
+    <div class="footer-inner">
+
+        <div>
+            <h3>{{ store_name }}</h3>
+            <p>
+                Proudly supporting Filipino craftsmanship and local
+                footwear traditions.
+            </p>
+        </div>
+
+        <div>
+            <h3 data-en="Address" data-fil="Address">
+                Address
+            </h3>
+
+            <p>{{ store_address }}</p>
+        </div>
+
+        <div>
+            <h3 data-en="Contact" data-fil="Kontak">
+                Contact
+            </h3>
+
+            <p>{{ store_phone }}</p>
+        </div>
+
+    </div>
+</footer>
+
+
 <script>
 
-function setTheme(theme) {
+let language = localStorage.getItem("rafaLanguage") || "en";
 
-    const body =
-        document.getElementById(
-            "dashboardBody"
-        );
+function updateLanguage() {
 
-    const button =
-        document.getElementById(
-            "themeButton"
-        );
+    document.querySelectorAll("[data-en]").forEach(function(element) {
 
-    if (theme === "dark") {
+        const value =
+            language === "en"
+                ? element.getAttribute("data-en")
+                : element.getAttribute("data-fil");
 
-        body.classList.add("dark");
+        if (value) {
+            element.textContent = value;
+        }
 
-        button.textContent = "☀️";
+    });
 
-    } else {
+    document.getElementById("languageLabel").textContent =
+        language === "en" ? "FIL" : "ENG";
 
-        body.classList.remove("dark");
+    localStorage.setItem("rafaLanguage", language);
+}
 
-        button.textContent = "🌙";
-    }
+function toggleLanguage() {
 
-    localStorage.setItem(
-        "padron-theme",
-        theme
-    );
+    language = language === "en"
+        ? "fil"
+        : "en";
+
+    updateLanguage();
 }
 
 
 function toggleTheme() {
 
-    const current =
-        localStorage.getItem(
-            "padron-theme"
-        ) || "light";
+    document.body.classList.toggle("dark");
 
-    setTheme(
-        current === "dark"
-            ? "light"
-            : "dark"
+    localStorage.setItem(
+        "rafaTheme",
+        document.body.classList.contains("dark")
+            ? "dark"
+            : "light"
     );
 }
 
 
-(function() {
+if (localStorage.getItem("rafaTheme") === "dark") {
+    document.body.classList.add("dark");
+}
 
-    const saved =
-        localStorage.getItem(
-            "padron-theme"
-        ) || "light";
-
-    setTheme(saved);
-
-})();
+updateLanguage();
 
 </script>
 
 </body>
-
 </html>
 """
 
 
-# ============================================================
-# COMMON TEMPLATE VARIABLES
-# ============================================================
+# -------------------------------------------------------------------
+# STAFF LOGIN
+# -------------------------------------------------------------------
 
-@app.context_processor
-def inject_globals():
+LOGIN_PAGE = """
+<!doctype html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Staff Login - {{ store_name }}</title>
+    <style>{{ css|safe }}</style>
+</head>
 
-    return {
-        "store_name": STORE_NAME,
-        "store_address": STORE_ADDRESS,
-        "store_phone": STORE_PHONE,
-        "store_email": STORE_EMAIL,
-        "style": STYLE,
-        "year": datetime.now().year,
-        "image_0": IMAGE_0,
-        "image_1": IMAGE_1,
-    }
+<body>
+
+<div class="form-card">
+
+    <h1>{{ store_name }}</h1>
+
+    <h2>Staff Login</h2>
+
+    {% with messages = get_flashed_messages() %}
+        {% for message in messages %}
+            <div class="flash">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+
+    <form method="POST">
+
+        <div class="form-group">
+            <label>Username</label>
+            <input name="username" required autocomplete="username">
+        </div>
+
+        <div class="form-group">
+            <label>Password</label>
+            <input
+                type="password"
+                name="password"
+                required
+                autocomplete="current-password"
+            >
+        </div>
+
+        <button class="btn" type="submit">
+            Login
+        </button>
+
+        <a class="btn secondary" href="{{ url_for('index') }}">
+            Back
+        </a>
+
+    </form>
+
+</div>
+
+</body>
+</html>
+"""
 
 
-# ============================================================
-# HOME
-# ============================================================
+# -------------------------------------------------------------------
+# STAFF DASHBOARD
+# -------------------------------------------------------------------
+
+DASHBOARD_PAGE = """
+<!doctype html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Staff Dashboard - {{ store_name }}</title>
+    <style>{{ css|safe }}</style>
+</head>
+
+<body>
+
+<nav class="navbar">
+    <div class="nav-inner">
+        <strong>{{ store_name }} Staff</strong>
+
+        <div class="nav-links">
+            <a href="{{ url_for('index') }}">Store</a>
+            <a href="{{ url_for('add_product') }}">Add Product</a>
+            <a href="{{ url_for('staff_logout') }}">Logout</a>
+        </div>
+    </div>
+</nav>
+
+
+<div class="container">
+
+    {% with messages = get_flashed_messages() %}
+        {% for message in messages %}
+            <div class="flash">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+
+
+    <h1>Staff Dashboard</h1>
+
+    <div class="dashboard-grid">
+
+        <div class="stat">
+            <div>Products</div>
+            <div class="stat-number">{{ product_count }}</div>
+        </div>
+
+        <div class="stat">
+            <div>Total Stock</div>
+            <div class="stat-number">{{ total_stock }}</div>
+        </div>
+
+        <div class="stat">
+            <div>Visitors</div>
+            <div class="stat-number">{{ visitor_count }}</div>
+        </div>
+
+    </div>
+
+
+    <h2>Products</h2>
+
+    <div class="table-wrap">
+
+        <table>
+
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Category</th>
+                    <th>Price</th>
+                    <th>Stock</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+
+            <tbody>
+
+                {% for product in products %}
+
+                <tr>
+                    <td>{{ product["name"] }}</td>
+                    <td>{{ product["category"] }}</td>
+                    <td>₱{{ "%.2f"|format(product["price"]) }}</td>
+                    <td>{{ product["stock"] }}</td>
+
+                    <td>
+                        <a
+                            class="btn"
+                            href="{{ url_for('edit_product', product_id=product['id']) }}"
+                        >
+                            Edit
+                        </a>
+
+                        <form
+                            method="POST"
+                            action="{{ url_for('delete_product', product_id=product['id']) }}"
+                            style="display:inline"
+                            onsubmit="return confirm('Delete this product?')"
+                        >
+                            <button class="btn danger" type="submit">
+                                Delete
+                            </button>
+                        </form>
+                    </td>
+
+                </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    </div>
+
+
+    <h2 style="margin-top:50px">
+        Visitor Information
+    </h2>
+
+    <p>
+        Visitor records are available only to logged-in staff.
+    </p>
+
+    <div class="table-wrap">
+
+        <table>
+
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>IP</th>
+                    <th>Device</th>
+                    <th>Language</th>
+                    <th>User Agent</th>
+                </tr>
+            </thead>
+
+            <tbody>
+
+                {% for visitor in visitors %}
+
+                <tr>
+                    <td>{{ visitor["visited_at"] }}</td>
+                    <td>{{ visitor["ip"] }}</td>
+                    <td>{{ visitor["device"] }}</td>
+                    <td>{{ visitor["language"] }}</td>
+                    <td style="max-width:400px;word-break:break-word">
+                        {{ visitor["user_agent"] }}
+                    </td>
+                </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    </div>
+
+</div>
+
+</body>
+</html>
+"""
+
+
+# -------------------------------------------------------------------
+# PRODUCT FORM
+# -------------------------------------------------------------------
+
+PRODUCT_FORM = """
+<!doctype html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }} - {{ store_name }}</title>
+    <style>{{ css|safe }}</style>
+</head>
+
+<body>
+
+<div class="form-card">
+
+    <h1>{{ title }}</h1>
+
+    <form method="POST">
+
+        <div class="form-group">
+            <label>Product Name</label>
+            <input
+                name="name"
+                value="{{ product['name'] if product else '' }}"
+                required
+            >
+        </div>
+
+        <div class="form-group">
+            <label>Description</label>
+            <textarea name="description">{{ product['description'] if product else '' }}</textarea>
+        </div>
+
+        <div class="form-group">
+            <label>Price (₱)</label>
+            <input
+                type="number"
+                step="0.01"
+                min="0"
+                name="price"
+                value="{{ product['price'] if product else 0 }}"
+                required
+            >
+        </div>
+
+        <div class="form-group">
+            <label>Stock</label>
+            <input
+                type="number"
+                min="0"
+                name="stock"
+                value="{{ product['stock'] if product else 0 }}"
+                required
+            >
+        </div>
+
+        <div class="form-group">
+            <label>Category</label>
+
+            <select name="category">
+                {% for category in ["Slippers", "Handcrafted", "Premium", "New", "Sale"] %}
+                    <option
+                        value="{{ category }}"
+                        {% if product and product['category'] == category %}
+                            selected
+                        {% endif %}
+                    >
+                        {{ category }}
+                    </option>
+                {% endfor %}
+            </select>
+
+        </div>
+
+        <div class="form-group">
+            <label>Image URL</label>
+            <input
+                name="image"
+                value="{{ product['image'] if product else '' }}"
+                placeholder="Optional image URL"
+            >
+        </div>
+
+        <button class="btn" type="submit">
+            Save
+        </button>
+
+        <a class="btn secondary" href="{{ url_for('dashboard') }}">
+            Cancel
+        </a>
+
+    </form>
+
+</div>
+
+</body>
+</html>
+"""
+
+
+# -------------------------------------------------------------------
+# ROUTES
+# -------------------------------------------------------------------
 
 @app.route("/")
-def home():
-
-    language = current_language()
+def index():
 
     record_visitor()
 
-    connection = get_db()
+    conn = get_db()
 
-    products = connection.execute(
-        """
+    products = conn.execute("""
         SELECT *
         FROM products
-        WHERE active = 1
         ORDER BY id DESC
-        """
-    ).fetchall()
+    """).fetchall()
 
-    connection.close()
+    conn.close()
 
     return render_template_string(
-        HOME_HTML,
+        PAGE,
+        css=CSS,
         products=products,
-        language=language,
-        t=TRANSLATIONS[language]
+        store_name=STORE_NAME,
+        store_address=STORE_ADDRESS,
+        store_phone=STORE_PHONE,
     )
 
 
-# ============================================================
-# STAFF LOGIN
-# ============================================================
-
-@app.route(
-    "/staff/login",
-    methods=["GET", "POST"]
-)
+@app.route("/staff/login", methods=["GET", "POST"])
 def staff_login():
 
     if request.method == "POST":
 
-        password = request.form.get(
-            "password",
-            ""
-        )
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
 
-        if secrets.compare_digest(
-            password,
-            STAFF_PASSWORD
+        if (
+            username == STAFF_USERNAME
+            and password == STAFF_PASSWORD
         ):
+            session["staff_logged_in"] = True
+            return redirect(url_for("dashboard"))
 
-            session.clear()
-
-            session["staff"] = True
-
-            return redirect(
-                url_for("staff_dashboard")
-            )
-
-        flash("Incorrect staff password.")
+        flash("Invalid username or password.")
 
     return render_template_string(
-        LOGIN_HTML
+        LOGIN_PAGE,
+        css=CSS,
+        store_name=STORE_NAME,
     )
 
 
 @app.route("/staff/logout")
 def staff_logout():
 
-    session.clear()
+    session.pop("staff_logged_in", None)
 
-    return redirect("/")
+    return redirect(url_for("index"))
 
-
-# ============================================================
-# STAFF DASHBOARD
-# ============================================================
 
 @app.route("/staff")
 @staff_required
-def staff_dashboard():
+def dashboard():
 
-    connection = get_db()
+    conn = get_db()
 
-    products = connection.execute(
-        """
+    products = conn.execute("""
         SELECT *
         FROM products
         ORDER BY id DESC
-        """
-    ).fetchall()
+    """).fetchall()
 
-    visitors = connection.execute(
-        """
+    product_count = conn.execute(
+        "SELECT COUNT(*) AS count FROM products"
+    ).fetchone()["count"]
+
+    total_stock = conn.execute(
+        "SELECT COALESCE(SUM(stock), 0) AS total FROM products"
+    ).fetchone()["total"]
+
+    visitor_count = conn.execute(
+        "SELECT COUNT(*) AS count FROM visitors"
+    ).fetchone()["count"]
+
+    visitors = conn.execute("""
         SELECT *
         FROM visitors
         ORDER BY id DESC
-        LIMIT 200
-        """
-    ).fetchall()
+        LIMIT 500
+    """).fetchall()
 
-    total_visitors = connection.execute(
-        """
-        SELECT COUNT(*)
-        FROM visitors
-        """
-    ).fetchone()[0]
-
-    product_count = connection.execute(
-        """
-        SELECT COUNT(*)
-        FROM products
-        """
-    ).fetchone()[0]
-
-    total_stock = connection.execute(
-        """
-        SELECT COALESCE(SUM(stock), 0)
-        FROM products
-        """
-    ).fetchone()[0]
-
-    connection.close()
+    conn.close()
 
     return render_template_string(
-        DASHBOARD_HTML,
+        DASHBOARD_PAGE,
+        css=CSS,
+        store_name=STORE_NAME,
         products=products,
-        visitors=visitors,
-        total_visitors=total_visitors,
         product_count=product_count,
-        total_stock=total_stock
+        total_stock=total_stock,
+        visitor_count=visitor_count,
+        visitors=visitors,
     )
 
 
-# ============================================================
-# CREATE PRODUCT
-# ============================================================
-
-@app.route(
-    "/staff/product/new",
-    methods=["POST"]
-)
+@app.route("/staff/product/add", methods=["GET", "POST"])
 @staff_required
-def create_product():
+def add_product():
 
-    name = request.form.get(
-        "name",
-        ""
-    ).strip()
+    if request.method == "POST":
 
-    if not name:
+        name = request.form.get("name", "").strip()
+        description = request.form.get("description", "").strip()
+        category = request.form.get("category", "Slippers").strip()
+        image = request.form.get("image", "").strip()
 
-        flash("Product name is required.")
+        try:
+            price = float(request.form.get("price", 0))
+            stock = int(request.form.get("stock", 0))
+        except ValueError:
+            flash("Price and stock must contain valid numbers.")
+            return redirect(url_for("add_product"))
 
-        return redirect("/staff")
+        if not name:
+            flash("Product name is required.")
+            return redirect(url_for("add_product"))
 
-    try:
+        if price < 0 or stock < 0:
+            flash("Price and stock cannot be negative.")
+            return redirect(url_for("add_product"))
 
-        price = max(
-            float(
-                request.form.get(
-                    "price",
-                    0
-                )
-            ),
-            0
-        )
+        conn = get_db()
 
-        stock = max(
-            int(
-                request.form.get(
-                    "stock",
-                    0
-                )
-            ),
-            0
-        )
-
-    except ValueError:
-
-        flash("Invalid price or stock.")
-
-        return redirect("/staff")
-
-    image_url = request.form.get(
-        "image_url",
-        IMAGE_0
-    )
-
-    if image_url not in (
-        IMAGE_0,
-        IMAGE_1
-    ):
-        image_url = IMAGE_0
-
-    connection = get_db()
-
-    connection.execute(
-        """
-        INSERT INTO products
-        (
+        conn.execute("""
+            INSERT INTO products
+            (name, description, price, stock, image, category)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
             name,
             description,
             price,
             stock,
-            sizes,
-            color,
-            image_url,
-            active,
-            created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
-        """,
-        (
-            name,
+            image,
+            category,
+        ))
 
-            request.form.get(
-                "description",
-                ""
-            ).strip(),
+        conn.commit()
+        conn.close()
 
-            price,
-            stock,
+        flash("Product added successfully.")
 
-            request.form.get(
-                "sizes",
-                ""
-            ).strip(),
+        return redirect(url_for("dashboard"))
 
-            request.form.get(
-                "color",
-                ""
-            ).strip(),
-
-            image_url,
-
-            datetime.now(
-                timezone.utc
-            ).isoformat()
-        )
+    return render_template_string(
+        PRODUCT_FORM,
+        css=CSS,
+        store_name=STORE_NAME,
+        title="Add Product",
+        product=None,
     )
 
-    connection.commit()
-    connection.close()
 
-    flash("Product added successfully.")
-
-    return redirect("/staff")
-
-
-# ============================================================
-# UPDATE PRODUCT
-# ============================================================
-
-@app.route(
-    "/staff/product/<int:product_id>/update",
-    methods=["POST"]
-)
+@app.route("/staff/product/<int:product_id>/edit", methods=["GET", "POST"])
 @staff_required
-def update_product(product_id):
+def edit_product(product_id):
 
-    name = request.form.get(
-        "name",
-        ""
-    ).strip()
+    conn = get_db()
 
-    if not name:
+    product = conn.execute(
+        "SELECT * FROM products WHERE id = ?",
+        (product_id,)
+    ).fetchone()
 
-        flash("Product name is required.")
+    if product is None:
+        conn.close()
+        flash("Product not found.")
+        return redirect(url_for("dashboard"))
 
-        return redirect("/staff")
+    if request.method == "POST":
 
-    try:
+        name = request.form.get("name", "").strip()
+        description = request.form.get("description", "").strip()
+        category = request.form.get("category", "Slippers").strip()
+        image = request.form.get("image", "").strip()
 
-        price = max(
-            float(
-                request.form.get(
-                    "price",
-                    0
-                )
-            ),
-            0
-        )
+        try:
+            price = float(request.form.get("price", 0))
+            stock = int(request.form.get("stock", 0))
+        except ValueError:
+            conn.close()
+            flash("Price and stock must contain valid numbers.")
+            return redirect(
+                url_for("edit_product", product_id=product_id)
+            )
 
-        stock = max(
-            int(
-                request.form.get(
-                    "stock",
-                    0
-                )
-            ),
-            0
-        )
+        if not name:
+            conn.close()
+            flash("Product name is required.")
+            return redirect(
+                url_for("edit_product", product_id=product_id)
+            )
 
-    except ValueError:
+        if price < 0 or stock < 0:
+            conn.close()
+            flash("Price and stock cannot be negative.")
+            return redirect(
+                url_for("edit_product", product_id=product_id)
+            )
 
-        flash("Invalid price or stock.")
-
-        return redirect("/staff")
-
-    image_url = request.form.get(
-        "image_url",
-        IMAGE_0
-    )
-
-    if image_url not in (
-        IMAGE_0,
-        IMAGE_1
-    ):
-        image_url = IMAGE_0
-
-    active = (
-        1
-        if request.form.get("active") == "1"
-        else 0
-    )
-
-    connection = get_db()
-
-    connection.execute(
-        """
-        UPDATE products
-
-        SET
-            name = ?,
-            description = ?,
-            price = ?,
-            stock = ?,
-            sizes = ?,
-            color = ?,
-            image_url = ?,
-            active = ?
-
-        WHERE id = ?
-        """,
-        (
+        conn.execute("""
+            UPDATE products
+            SET
+                name = ?,
+                description = ?,
+                price = ?,
+                stock = ?,
+                image = ?,
+                category = ?
+            WHERE id = ?
+        """, (
             name,
-
-            request.form.get(
-                "description",
-                ""
-            ).strip(),
-
+            description,
             price,
             stock,
+            image,
+            category,
+            product_id,
+        ))
 
-            request.form.get(
-                "sizes",
-                ""
-            ).strip(),
+        conn.commit()
+        conn.close()
 
-            request.form.get(
-                "color",
-                ""
-            ).strip(),
+        flash("Product updated successfully.")
 
-            image_url,
-            active,
+        return redirect(url_for("dashboard"))
 
-            product_id
-        )
+    conn.close()
+
+    return render_template_string(
+        PRODUCT_FORM,
+        css=CSS,
+        store_name=STORE_NAME,
+        title="Edit Product",
+        product=product,
     )
 
-    connection.commit()
-    connection.close()
 
-    flash("Product updated successfully.")
-
-    return redirect("/staff")
-
-
-# ============================================================
-# DELETE PRODUCT
-# ============================================================
-
-@app.route(
-    "/staff/product/<int:product_id>/delete",
-    methods=["POST"]
-)
+@app.route("/staff/product/<int:product_id>/delete", methods=["POST"])
 @staff_required
 def delete_product(product_id):
 
-    connection = get_db()
+    conn = get_db()
 
-    connection.execute(
+    conn.execute(
         "DELETE FROM products WHERE id = ?",
         (product_id,)
     )
 
-    connection.commit()
-    connection.close()
+    conn.commit()
+    conn.close()
 
     flash("Product deleted.")
 
-    return redirect("/staff")
+    return redirect(url_for("dashboard"))
 
 
-# ============================================================
-# ERROR HANDLERS
-# ============================================================
+# -------------------------------------------------------------------
+# HEALTH CHECK
+# -------------------------------------------------------------------
 
-@app.errorhandler(404)
-def not_found(error):
-
-    return """
-    <h1>404</h1>
-    <p>Page not found.</p>
-    <a href="/">Return to PADRON</a>
-    """, 404
+@app.route("/health")
+def health():
+    return {
+        "status": "ok",
+        "store": STORE_NAME,
+    }
 
 
-@app.errorhandler(500)
-def server_error(error):
-
-    return """
-    <h1>500</h1>
-    <p>Something went wrong.</p>
-    <a href="/">Return to PADRON</a>
-    """, 500
-
-
-# ============================================================
-# INITIALIZE
-# ============================================================
-
-init_database()
-
-update_default_images()
-
-
-# ============================================================
-# LOCAL DEVELOPMENT
-# ============================================================
+# -------------------------------------------------------------------
+# RUN
+# -------------------------------------------------------------------
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
 
     app.run(
         host="0.0.0.0",
-        port=int(
-            os.getenv(
-                "PORT",
-                "5000"
-            )
-        ),
-        debug=False
+        port=port,
+        debug=False,
     )
