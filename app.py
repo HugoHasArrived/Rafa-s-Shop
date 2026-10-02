@@ -1,27 +1,26 @@
 import os
 import sqlite3
-import hashlib
 from functools import wraps
-from flask import (
-    Flask, request, redirect, url_for, session,
-    jsonify, render_template_string
-)
+from flask import Flask, request, redirect, url_for, session, jsonify, render_template_string
 
 app = Flask(__name__)
 
 # ============================================================
-# CONFIG
+# PADRON CONFIG
 # ============================================================
 
-app.secret_key = os.environ.get("SECRET_KEY", "padron-change-this-secret-key")
+app.secret_key = os.environ.get(
+    "SECRET_KEY",
+    "CHANGE_THIS_PADRON_SECRET_KEY"
+)
 
-DATABASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "padron.db")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATABASE = os.path.join(BASE_DIR, "padron.db")
 
 STORE_NAME = "PADRON"
 STORE_ADDRESS = "268 A. Mabini Street, Liliw, Laguna"
 STORE_PHONE = "0976 1296450"
 
-# Change these credentials before using the staff system publicly.
 STAFF_USERNAME = os.environ.get("STAFF_USERNAME", "staff")
 STAFF_PASSWORD = os.environ.get("STAFF_PASSWORD", "padron2026")
 
@@ -30,16 +29,17 @@ STAFF_PASSWORD = os.environ.get("STAFF_PASSWORD", "padron2026")
 # DATABASE
 # ============================================================
 
-def get_db():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    return conn
+def db():
+    connection = sqlite3.connect(DATABASE)
+    connection.row_factory = sqlite3.Row
+    return connection
 
 
-def init_db():
-    conn = get_db()
+def init_database():
 
-    conn.execute("""
+    connection = db()
+
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -55,7 +55,7 @@ def init_db():
         )
     """)
 
-    conn.execute("""
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS visitors (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ip TEXT,
@@ -66,15 +66,17 @@ def init_db():
         )
     """)
 
-    # Add starter products only if database is empty.
-    count = conn.execute("SELECT COUNT(*) FROM products").fetchone()[0]
+    count = connection.execute(
+        "SELECT COUNT(*) FROM products"
+    ).fetchone()[0]
 
     if count == 0:
-        starter_products = [
+
+        products = [
             (
                 "Handmade Mule",
                 "Mules",
-                "Handcrafted footwear inspired by Filipino artistry.",
+                "A handcrafted Filipino mule inspired by the creativity of Laguna artisans.",
                 0,
                 0,
                 "35,36,37,38,39,40",
@@ -85,18 +87,18 @@ def init_db():
             (
                 "Classic Flat",
                 "Flats",
-                "Elegant handmade flats created by Laguna artisans.",
+                "A refined handmade flat designed with Filipino craftsmanship.",
                 0,
                 0,
                 "35,36,37,38,39,40",
-                "Brown",
+                "Earth",
                 "Inabel",
-                0
+                1
             ),
             (
                 "Platform Espadrille",
                 "Platform",
-                "A handcrafted platform design celebrating local craftsmanship.",
+                "A contemporary platform silhouette with locally inspired details.",
                 0,
                 0,
                 "35,36,37,38,39,40",
@@ -107,63 +109,92 @@ def init_db():
             (
                 "Wedge Espadrille",
                 "Wedges",
-                "A Filipino-inspired wedge featuring locally sourced materials.",
+                "A statement wedge celebrating the heritage and artistry of Liliw.",
                 0,
                 0,
                 "35,36,37,38,39,40",
-                "Earth",
+                "Brown",
                 "Ifugao Fabric",
                 0
             )
         ]
 
-        conn.executemany("""
+        connection.executemany("""
             INSERT INTO products
-            (name, category, description, price, stock, sizes, color,
-             material, featured)
+            (
+                name,
+                category,
+                description,
+                price,
+                stock,
+                sizes,
+                color,
+                material,
+                featured
+            )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, starter_products)
+        """, products)
 
-    conn.commit()
-    conn.close()
+    connection.commit()
+    connection.close()
 
 
-init_db()
+init_database()
 
 
 # ============================================================
-# AUTHENTICATION
+# STAFF AUTH
 # ============================================================
 
 def staff_required(function):
+
     @wraps(function)
-    def wrapper(*args, **kwargs):
+    def protected(*args, **kwargs):
+
         if not session.get("staff_logged_in"):
             return redirect(url_for("staff_login"))
+
         return function(*args, **kwargs)
 
-    return wrapper
+    return protected
 
 
 # ============================================================
-# VISITOR TRACKING
+# VISITOR ANALYTICS
 # ============================================================
 
 @app.before_request
-def track_visitor():
-    # Don't record staff dashboard/API traffic.
-    if request.path.startswith("/staff") or request.path.startswith("/api"):
+def visitor_tracking():
+
+    if request.path.startswith("/staff"):
+        return
+
+    if request.path.startswith("/api"):
         return
 
     try:
-        conn = get_db()
 
-        # Render/proxies can send the real visitor IP in X-Forwarded-For.
-        forwarded = request.headers.get("X-Forwarded-For", "")
-        ip = forwarded.split(",")[0].strip() if forwarded else request.remote_addr
+        connection = db()
 
-        conn.execute("""
-            INSERT INTO visitors (ip, user_agent, language, page)
+        forwarded = request.headers.get(
+            "X-Forwarded-For",
+            ""
+        )
+
+        ip = (
+            forwarded.split(",")[0].strip()
+            if forwarded
+            else request.remote_addr
+        )
+
+        connection.execute("""
+            INSERT INTO visitors
+            (
+                ip,
+                user_agent,
+                language,
+                page
+            )
             VALUES (?, ?, ?, ?)
         """, (
             ip,
@@ -172,28 +203,36 @@ def track_visitor():
             request.path[:200]
         ))
 
-        conn.commit()
-        conn.close()
+        connection.commit()
+        connection.close()
+
     except Exception:
         pass
 
 
 # ============================================================
-# MAIN PAGE
+# HOME
 # ============================================================
 
 @app.route("/")
-def index():
-    conn = get_db()
-    products = conn.execute("""
-        SELECT * FROM products
+def home():
+
+    connection = db()
+
+    products = connection.execute("""
+        SELECT *
+        FROM products
         ORDER BY featured DESC, id DESC
     """).fetchall()
-    conn.close()
+
+    connection.close()
 
     return render_template_string(
-        MAIN_PAGE,
-        products=products
+        HOME_PAGE,
+        products=products,
+        store_name=STORE_NAME,
+        store_address=STORE_ADDRESS,
+        store_phone=STORE_PHONE
     )
 
 
@@ -204,16 +243,31 @@ def index():
 @app.route("/staff/login", methods=["GET", "POST"])
 def staff_login():
 
-    error = ""
+    error = None
 
     if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
 
-        if username == STAFF_USERNAME and password == STAFF_PASSWORD:
+        username = request.form.get(
+            "username",
+            ""
+        ).strip()
+
+        password = request.form.get(
+            "password",
+            ""
+        )
+
+        if (
+            username == STAFF_USERNAME
+            and password == STAFF_PASSWORD
+        ):
+
             session["staff_logged_in"] = True
             session["staff_username"] = username
-            return redirect(url_for("staff_dashboard"))
+
+            return redirect(
+                url_for("staff_dashboard")
+            )
 
         error = "Incorrect username or password."
 
@@ -225,8 +279,10 @@ def staff_login():
 
 @app.route("/staff/logout")
 def staff_logout():
+
     session.clear()
-    return redirect(url_for("index"))
+
+    return redirect(url_for("home"))
 
 
 # ============================================================
@@ -237,37 +293,44 @@ def staff_logout():
 @staff_required
 def staff_dashboard():
 
-    conn = get_db()
+    connection = db()
 
-    products = conn.execute("""
-        SELECT * FROM products
+    products = connection.execute("""
+        SELECT *
+        FROM products
         ORDER BY id DESC
     """).fetchall()
 
-    visitor_count = conn.execute("""
-        SELECT COUNT(*) FROM visitors
-    """).fetchone()[0]
-
-    recent_visitors = conn.execute("""
+    visitors = connection.execute("""
         SELECT *
         FROM visitors
         ORDER BY id DESC
         LIMIT 100
     """).fetchall()
 
-    total_stock = conn.execute("""
-        SELECT COALESCE(SUM(stock), 0)
+    total_visitors = connection.execute(
+        "SELECT COUNT(*) FROM visitors"
+    ).fetchone()[0]
+
+    total_stock = connection.execute(
+        "SELECT COALESCE(SUM(stock), 0) FROM products"
+    ).fetchone()[0]
+
+    low_stock = connection.execute("""
+        SELECT COUNT(*)
         FROM products
+        WHERE stock <= 5
     """).fetchone()[0]
 
-    conn.close()
+    connection.close()
 
     return render_template_string(
         STAFF_PAGE,
         products=products,
-        visitors=recent_visitors,
-        visitor_count=visitor_count,
-        total_stock=total_stock
+        visitors=visitors,
+        total_visitors=total_visitors,
+        total_stock=total_stock,
+        low_stock=low_stock
     )
 
 
@@ -277,11 +340,13 @@ def staff_dashboard():
 
 @app.route("/api/products", methods=["POST"])
 @staff_required
-def add_product():
+def create_product():
 
     data = request.get_json(silent=True) or {}
 
-    name = str(data.get("name", "")).strip()
+    name = str(
+        data.get("name", "")
+    ).strip()
 
     if not name:
         return jsonify({
@@ -290,36 +355,55 @@ def add_product():
         }), 400
 
     try:
-        price = float(data.get("price", 0))
-        stock = int(data.get("stock", 0))
+
+        price = float(
+            data.get("price", 0)
+        )
+
+        stock = int(
+            data.get("stock", 0)
+        )
+
     except (ValueError, TypeError):
+
         return jsonify({
             "success": False,
             "message": "Invalid price or stock."
         }), 400
 
-    conn = get_db()
+    connection = db()
 
-    cursor = conn.execute("""
+    cursor = connection.execute("""
         INSERT INTO products
-        (name, category, description, price, stock, sizes,
-         color, material, featured)
+        (
+            name,
+            category,
+            description,
+            price,
+            stock,
+            sizes,
+            color,
+            material,
+            featured
+        )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         name,
-        str(data.get("category", "Footwear")),
-        str(data.get("description", "")),
+        data.get("category", "Footwear"),
+        data.get("description", ""),
         price,
         stock,
-        str(data.get("sizes", "")),
-        str(data.get("color", "")),
-        str(data.get("material", "")),
+        data.get("sizes", ""),
+        data.get("color", ""),
+        data.get("material", ""),
         1 if data.get("featured") else 0
     ))
 
-    conn.commit()
+    connection.commit()
+
     product_id = cursor.lastrowid
-    conn.close()
+
+    connection.close()
 
     return jsonify({
         "success": True,
@@ -327,24 +411,35 @@ def add_product():
     })
 
 
-@app.route("/api/products/<int:product_id>", methods=["PUT"])
+@app.route(
+    "/api/products/<int:product_id>",
+    methods=["PUT"]
+)
 @staff_required
-def update_product(product_id):
+def edit_product(product_id):
 
     data = request.get_json(silent=True) or {}
 
     try:
-        price = float(data.get("price", 0))
-        stock = int(data.get("stock", 0))
+
+        price = float(
+            data.get("price", 0)
+        )
+
+        stock = int(
+            data.get("stock", 0)
+        )
+
     except (ValueError, TypeError):
+
         return jsonify({
             "success": False,
             "message": "Invalid price or stock."
         }), 400
 
-    conn = get_db()
+    connection = db()
 
-    result = conn.execute("""
+    result = connection.execute("""
         UPDATE products
         SET
             name = ?,
@@ -359,94 +454,128 @@ def update_product(product_id):
         WHERE id = ?
     """, (
         str(data.get("name", "")).strip(),
-        str(data.get("category", "Footwear")),
-        str(data.get("description", "")),
+        data.get("category", "Footwear"),
+        data.get("description", ""),
         price,
         stock,
-        str(data.get("sizes", "")),
-        str(data.get("color", "")),
-        str(data.get("material", "")),
+        data.get("sizes", ""),
+        data.get("color", ""),
+        data.get("material", ""),
         1 if data.get("featured") else 0,
         product_id
     ))
 
-    conn.commit()
-    conn.close()
+    connection.commit()
+    connection.close()
 
     if result.rowcount == 0:
+
         return jsonify({
             "success": False,
             "message": "Product not found."
         }), 404
 
-    return jsonify({"success": True})
+    return jsonify({
+        "success": True
+    })
 
 
-@app.route("/api/products/<int:product_id>", methods=["DELETE"])
+@app.route(
+    "/api/products/<int:product_id>",
+    methods=["DELETE"]
+)
 @staff_required
-def delete_product(product_id):
+def remove_product(product_id):
 
-    conn = get_db()
+    connection = db()
 
-    result = conn.execute(
+    result = connection.execute(
         "DELETE FROM products WHERE id = ?",
         (product_id,)
     )
 
-    conn.commit()
-    conn.close()
+    connection.commit()
+    connection.close()
 
     if result.rowcount == 0:
+
         return jsonify({
             "success": False,
             "message": "Product not found."
         }), 404
 
-    return jsonify({"success": True})
+    return jsonify({
+        "success": True
+    })
 
 
-# ============================================================
-# CLEAR VISITOR LOG
-# ============================================================
-
-@app.route("/api/visitors/clear", methods=["POST"])
+@app.route(
+    "/api/visitors/clear",
+    methods=["POST"]
+)
 @staff_required
 def clear_visitors():
 
-    conn = get_db()
-    conn.execute("DELETE FROM visitors")
-    conn.commit()
-    conn.close()
+    connection = db()
 
-    return jsonify({"success": True})
+    connection.execute(
+        "DELETE FROM visitors"
+    )
+
+    connection.commit()
+    connection.close()
+
+    return jsonify({
+        "success": True
+    })
 
 
 # ============================================================
-# MAIN WEBSITE HTML
+# HOME PAGE
 # ============================================================
 
-MAIN_PAGE = r"""
+HOME_PAGE = r"""
 <!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<title>PADRON | Filipino Handcrafted Footwear</title>
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
+
+<title>PADRON — Filipino Handcrafted Footwear</title>
 
 <style>
 
+@import url(
+    'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap'
+);
+
 :root {
-    --bg: #f7efe5;
-    --surface: #fffaf4;
-    --surface2: #efe0cf;
-    --text: #3a2418;
-    --muted: #806858;
-    --brown: #8a5a3b;
-    --brown2: #b47b55;
-    --gold: #d4a15c;
-    --border: rgba(92,55,31,.15);
-    --shadow: 0 18px 50px rgba(82,49,27,.13);
+
+    --bg: #f5ede3;
+    --cream: #fffaf4;
+    --cream2: #ead9c7;
+
+    --brown: #75452d;
+    --brown2: #a86d49;
+
+    --dark: #2e1c14;
+    --muted: #806b5b;
+
+    --gold: #c99b62;
+
+    --border: rgba(91, 54, 35, .13);
+
+    --shadow:
+        0 25px 80px rgba(83, 50, 30, .12);
+
+    --radius: 28px;
 }
 
 * {
@@ -458,28 +587,53 @@ html {
 }
 
 body {
+
     margin: 0;
-    font-family: Inter, Arial, sans-serif;
+
+    color: var(--dark);
+
     background:
-        radial-gradient(circle at 10% 10%, rgba(212,161,92,.15), transparent 30%),
-        radial-gradient(circle at 90% 20%, rgba(180,123,85,.12), transparent 30%),
+        radial-gradient(
+            circle at 10% 0%,
+            rgba(211, 165, 113, .25),
+            transparent 30%
+        ),
+        radial-gradient(
+            circle at 90% 15%,
+            rgba(169, 111, 76, .16),
+            transparent 28%
+        ),
         var(--bg);
-    color: var(--text);
-    transition: .35s;
+
+    font-family: "DM Sans", sans-serif;
+
     text-align: center;
+
+    transition:
+        background .4s,
+        color .4s;
 }
 
 body.dark {
-    --bg: #211812;
-    --surface: #2e211a;
-    --surface2: #3c2a20;
-    --text: #fff3e4;
-    --muted: #c8ad98;
-    --brown: #d49b70;
-    --brown2: #e5b285;
-    --gold: #e1b66f;
-    --border: rgba(255,255,255,.12);
-    --shadow: 0 20px 60px rgba(0,0,0,.35);
+
+    --bg: #1e1510;
+    --cream: #2b1e17;
+    --cream2: #3b291f;
+
+    --dark: #fff2e4;
+    --muted: #c9ae99;
+
+    --brown: #d49a6e;
+    --brown2: #e2b58e;
+
+    --border: rgba(255,255,255,.1);
+
+    --shadow:
+        0 25px 80px rgba(0,0,0,.3);
+}
+
+a {
+    color: inherit;
 }
 
 button,
@@ -493,321 +647,855 @@ button {
     cursor: pointer;
 }
 
+/* NAV */
+
 .nav {
+
     position: sticky;
+
     top: 0;
-    z-index: 50;
-    backdrop-filter: blur(18px);
-    background: color-mix(in srgb, var(--surface), transparent 12%);
-    border-bottom: 1px solid var(--border);
+
+    z-index: 100;
+
+    backdrop-filter: blur(20px);
+
+    background:
+        color-mix(
+            in srgb,
+            var(--cream),
+            transparent 13%
+        );
+
+    border-bottom:
+        1px solid var(--border);
 }
 
 .nav-inner {
-    max-width: 1200px;
+
+    max-width: 1250px;
+
     margin: auto;
+
     padding: 14px 20px;
+
     display: flex;
+
     align-items: center;
+
     justify-content: space-between;
+
     gap: 20px;
 }
 
 .brand {
+
     display: flex;
+
     align-items: center;
+
     gap: 12px;
-    font-weight: 900;
+
+    font-weight: 800;
+
     letter-spacing: 4px;
+
+    white-space: nowrap;
 }
 
 .brand img {
-    width: 45px;
-    height: 45px;
+
+    width: 44px;
+    height: 44px;
+
     object-fit: contain;
+
     border-radius: 12px;
 }
 
 .nav-links {
+
     display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
+
+    align-items: center;
+
     justify-content: center;
+
+    gap: 5px;
+
+    flex-wrap: wrap;
 }
 
-.nav-links a,
-.nav-button {
+.nav-link,
+.nav-btn {
+
     border: 0;
+
     background: transparent;
-    color: var(--text);
+
     text-decoration: none;
+
+    color: var(--dark);
+
     padding: 9px 13px;
+
     border-radius: 999px;
+
     transition: .25s;
 }
 
-.nav-links a:hover,
-.nav-button:hover {
-    background: var(--surface2);
+.nav-link:hover,
+.nav-btn:hover {
+
+    background: var(--cream2);
+
     transform: translateY(-2px);
 }
 
+/* HERO */
+
 .hero {
-    min-height: 78vh;
+
+    min-height: 88vh;
+
     display: flex;
+
     align-items: center;
+
     justify-content: center;
-    padding: 70px 20px;
+
+    padding: 70px 20px 100px;
+
+    position: relative;
+
+    overflow: hidden;
 }
 
-.hero-inner {
+.hero::before {
+
+    content: "";
+
+    position: absolute;
+
+    width: 500px;
+    height: 500px;
+
+    border-radius: 50%;
+
+    background:
+        radial-gradient(
+            circle,
+            rgba(197, 143, 90, .18),
+            transparent 70%
+        );
+
+    animation: pulse 7s infinite alternate;
+}
+
+@keyframes pulse {
+
+    from {
+        transform: scale(.8);
+    }
+
+    to {
+        transform: scale(1.25);
+    }
+}
+
+.hero-content {
+
+    position: relative;
+
     max-width: 950px;
+
     margin: auto;
 }
 
 .hero-logo {
-    width: min(170px, 45vw);
-    height: 170px;
+
+    width: 155px;
+    height: 155px;
+
     object-fit: contain;
-    filter: drop-shadow(0 15px 25px rgba(100,60,30,.2));
-    animation: float 5s ease-in-out infinite;
+
+    filter:
+        drop-shadow(
+            0 18px 30px rgba(75,45,28,.2)
+        );
+
+    animation:
+        float 5s ease-in-out infinite;
 }
 
 @keyframes float {
-    0%,100% { transform: translateY(0); }
-    50% { transform: translateY(-12px); }
+
+    0%,100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-13px);
+    }
 }
 
-.badge {
-    display: inline-block;
-    margin: 20px 0 10px;
-    padding: 8px 16px;
+.eyebrow {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    gap: 8px;
+
+    margin-top: 25px;
+
+    padding: 9px 17px;
+
     border-radius: 999px;
-    background: var(--surface2);
+
+    background: var(--cream);
+
+    border: 1px solid var(--border);
+
     color: var(--brown);
-    font-weight: 800;
+
+    font-weight: 700;
+
+    font-size: 13px;
+
     letter-spacing: 1px;
+
+    box-shadow: var(--shadow);
 }
 
-h1 {
-    font-size: clamp(50px, 10vw, 110px);
-    line-height: .9;
-    margin: 12px 0;
-    letter-spacing: -5px;
+.hero h1 {
+
+    font-family:
+        "Playfair Display",
+        serif;
+
+    font-size:
+        clamp(65px, 12vw, 145px);
+
+    line-height: .84;
+
+    letter-spacing: -7px;
+
+    margin: 25px 0 20px;
+
+    background:
+        linear-gradient(
+            120deg,
+            var(--dark),
+            var(--brown2)
+        );
+
+    -webkit-background-clip: text;
+
+    color: transparent;
 }
 
-.hero p {
+.hero-text {
+
     max-width: 700px;
-    margin: 25px auto;
+
+    margin: auto;
+
     color: var(--muted);
+
+    line-height: 1.9;
+
     font-size: 18px;
-    line-height: 1.8;
 }
 
 .hero-buttons {
+
+    margin-top: 32px;
+
     display: flex;
+
     justify-content: center;
+
     gap: 12px;
+
     flex-wrap: wrap;
 }
 
 .btn {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    gap: 8px;
+
     border: 1px solid var(--border);
-    padding: 14px 22px;
+
     border-radius: 999px;
+
+    padding: 14px 23px;
+
     text-decoration: none;
+
     font-weight: 800;
-    transition: .25s;
-}
 
-.btn-primary {
-    color: white;
-    background: linear-gradient(135deg, var(--brown), var(--brown2));
-    box-shadow: 0 12px 30px rgba(120,75,40,.2);
-}
-
-.btn-secondary {
-    color: var(--text);
-    background: var(--surface);
+    transition: .3s;
 }
 
 .btn:hover {
-    transform: translateY(-4px) scale(1.02);
+
+    transform:
+        translateY(-5px)
+        scale(1.025);
 }
 
+.primary {
+
+    color: white;
+
+    background:
+        linear-gradient(
+            135deg,
+            var(--brown),
+            var(--brown2)
+        );
+
+    box-shadow:
+        0 14px 30px
+        rgba(113, 68, 43, .2);
+}
+
+.secondary {
+
+    background: var(--cream);
+
+    color: var(--dark);
+}
+
+/* SECTION */
+
 .section {
-    padding: 90px 20px;
+
+    padding: 105px 20px;
 }
 
 .section-inner {
-    max-width: 1150px;
+
+    max-width: 1180px;
+
     margin: auto;
 }
 
+.section-tag {
+
+    color: var(--brown);
+
+    font-weight: 800;
+
+    letter-spacing: 2px;
+
+    text-transform: uppercase;
+
+    font-size: 12px;
+}
+
 .section-title {
-    font-size: clamp(35px, 6vw, 60px);
-    margin: 0 0 15px;
+
+    font-family:
+        "Playfair Display",
+        serif;
+
+    font-size:
+        clamp(42px, 7vw, 75px);
+
+    line-height: 1;
+
+    margin: 12px 0 20px;
+
     letter-spacing: -2px;
 }
 
 .section-subtitle {
-    max-width: 750px;
-    margin: 0 auto 45px;
+
+    max-width: 760px;
+
+    margin: auto;
+
     color: var(--muted);
-    line-height: 1.8;
+
+    line-height: 1.9;
 }
 
-.about-grid {
+/* STORY */
+
+.story-grid {
+
+    margin-top: 55px;
+
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+
+    grid-template-columns:
+        repeat(
+            auto-fit,
+            minmax(240px, 1fr)
+        );
+
     gap: 20px;
 }
 
-.info-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    padding: 30px;
-    border-radius: 30px;
+.story-card {
+
+    padding: 34px;
+
+    border:
+        1px solid var(--border);
+
+    border-radius: var(--radius);
+
+    background: var(--cream);
+
     box-shadow: var(--shadow);
-    transition: .3s;
-}
 
-.info-card:hover {
-    transform: translateY(-8px);
-}
-
-.info-card h3 {
-    color: var(--brown);
-}
-
-.products-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 22px;
-}
-
-.product {
-    position: relative;
-    overflow: hidden;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 30px;
-    padding: 25px;
-    box-shadow: var(--shadow);
     transition: .35s;
 }
 
+.story-card:hover {
+
+    transform:
+        translateY(-10px)
+        rotate(-.4deg);
+}
+
+.story-icon {
+
+    width: 60px;
+    height: 60px;
+
+    margin: auto auto 20px;
+
+    display: grid;
+
+    place-items: center;
+
+    border-radius: 20px;
+
+    background: var(--cream2);
+
+    font-size: 28px;
+}
+
+.story-card h3 {
+
+    color: var(--brown);
+
+    font-size: 21px;
+}
+
+.story-card p {
+
+    color: var(--muted);
+
+    line-height: 1.8;
+}
+
+/* PRODUCTS */
+
+.products-section {
+
+    background:
+        linear-gradient(
+            180deg,
+            transparent,
+            rgba(210,165,116,.1)
+        );
+}
+
+.filters {
+
+    margin: 45px auto;
+
+    display: flex;
+
+    justify-content: center;
+
+    gap: 8px;
+
+    flex-wrap: wrap;
+}
+
+.filter {
+
+    border: 1px solid var(--border);
+
+    background: var(--cream);
+
+    color: var(--dark);
+
+    border-radius: 999px;
+
+    padding: 10px 17px;
+
+    transition: .25s;
+}
+
+.filter.active,
+.filter:hover {
+
+    color: white;
+
+    background: var(--brown);
+}
+
+.search {
+
+    width: min(400px, 90%);
+
+    margin: 0 auto 35px;
+
+    display: block;
+
+    border:
+        1px solid var(--border);
+
+    background: var(--cream);
+
+    color: var(--dark);
+
+    border-radius: 999px;
+
+    padding: 14px 20px;
+
+    outline: none;
+}
+
+.products {
+
+    display: grid;
+
+    grid-template-columns:
+        repeat(
+            auto-fit,
+            minmax(245px, 1fr)
+        );
+
+    gap: 24px;
+
+    text-align: center;
+}
+
+.product {
+
+    position: relative;
+
+    overflow: hidden;
+
+    padding: 18px;
+
+    border:
+        1px solid var(--border);
+
+    border-radius: 32px;
+
+    background: var(--cream);
+
+    box-shadow: var(--shadow);
+
+    transition:
+        transform .4s,
+        opacity .3s;
+}
+
 .product:hover {
-    transform: translateY(-10px) rotate(-.5deg);
+
+    transform:
+        translateY(-10px)
+        rotate(-.6deg);
 }
 
 .product-art {
-    height: 190px;
-    border-radius: 22px;
-    background:
-        radial-gradient(circle at 50% 40%, rgba(212,161,92,.55), transparent 28%),
-        linear-gradient(135deg, var(--surface2), transparent);
+
+    height: 210px;
+
     display: grid;
+
     place-items: center;
-    font-size: 75px;
+
+    border-radius: 25px;
+
+    background:
+        radial-gradient(
+            circle at 50% 40%,
+            rgba(201,155,98,.45),
+            transparent 28%
+        ),
+        linear-gradient(
+            135deg,
+            var(--cream2),
+            transparent
+        );
+
+    font-size: 82px;
 }
 
 .product h3 {
-    margin: 20px 0 5px;
+
+    margin:
+        22px 0 7px;
+
+    font-family:
+        "Playfair Display",
+        serif;
+
+    font-size: 25px;
 }
 
 .product p {
+
     color: var(--muted);
-    line-height: 1.6;
+
+    line-height: 1.7;
+
+    min-height: 60px;
 }
 
-.price {
-    font-weight: 900;
-    color: var(--brown);
-    font-size: 20px;
+.product-meta {
+
+    display: flex;
+
+    justify-content: center;
+
+    gap: 7px;
+
+    flex-wrap: wrap;
 }
 
-.stock {
-    display: inline-block;
-    margin-top: 10px;
-    padding: 7px 12px;
+.pill {
+
+    padding: 7px 11px;
+
     border-radius: 999px;
-    background: var(--surface2);
+
+    background: var(--cream2);
+
     color: var(--muted);
-    font-size: 13px;
+
+    font-size: 12px;
+
+    font-weight: 700;
 }
+
+.featured {
+
+    position: absolute;
+
+    top: 25px;
+
+    left: 25px;
+
+    z-index: 2;
+
+    background: var(--brown);
+
+    color: white;
+
+    padding: 7px 11px;
+
+    border-radius: 999px;
+
+    font-size: 11px;
+
+    font-weight: 800;
+}
+
+/* MISSION */
 
 .mission {
-    background: var(--surface2);
+
+    background: var(--cream2);
 }
 
+.quote {
+
+    max-width: 900px;
+
+    margin: 50px auto 0;
+
+    font-family:
+        "Playfair Display",
+        serif;
+
+    font-size:
+        clamp(25px, 4vw, 42px);
+
+    line-height: 1.4;
+
+    color: var(--brown);
+}
+
+/* CONTACT */
+
 .contact {
-    background: var(--surface);
-    border-top: 1px solid var(--border);
-    padding: 70px 20px;
+
+    padding: 100px 20px;
+
+    background: var(--cream);
 }
 
 .contact-box {
-    max-width: 800px;
+
+    max-width: 850px;
+
     margin: auto;
+
+    padding: 55px 30px;
+
+    border:
+        1px solid var(--border);
+
+    border-radius: 35px;
+
+    box-shadow: var(--shadow);
 }
 
-.contact h2 {
-    font-size: 45px;
+.contact-box h2 {
+
+    font-family:
+        "Playfair Display",
+        serif;
+
+    font-size: 55px;
+
+    margin: 0 0 20px;
 }
 
 .contact-line {
+
     color: var(--muted);
-    margin: 12px 0;
+
+    margin: 10px 0;
 }
+
+/* FOOTER */
 
 footer {
+
     padding: 35px 20px;
+
     color: var(--muted);
-    background: var(--surface);
-    border-top: 1px solid var(--border);
+
+    background: var(--cream);
+
+    border-top:
+        1px solid var(--border);
 }
 
+.by {
+
+    margin-top: 8px;
+
+    font-size: 12px;
+
+    letter-spacing: 2px;
+}
+
+/* REVEAL */
+
+.reveal {
+
+    opacity: 0;
+
+    transform: translateY(25px);
+
+    transition:
+        opacity .8s,
+        transform .8s;
+}
+
+.reveal.visible {
+
+    opacity: 1;
+
+    transform: translateY(0);
+}
+
+/* TOAST */
+
 #toast {
+
     position: fixed;
+
+    z-index: 1000;
+
     bottom: 25px;
+
     left: 50%;
-    transform: translate(-50%, 120px);
-    z-index: 100;
-    background: var(--text);
+
+    transform:
+        translate(-50%, 100px);
+
+    background: var(--dark);
+
     color: var(--bg);
-    padding: 14px 20px;
+
+    padding: 13px 20px;
+
     border-radius: 999px;
-    transition: .3s;
+
+    transition: .35s;
+
     box-shadow: var(--shadow);
 }
 
 #toast.show {
-    transform: translate(-50%, 0);
+
+    transform:
+        translate(-50%, 0);
 }
 
-@media(max-width:700px) {
+/* MOBILE */
+
+@media(max-width: 760px) {
 
     .nav-inner {
+
         flex-direction: column;
+
     }
 
     .nav-links {
+
         width: 100%;
     }
 
-    h1 {
-        letter-spacing: -3px;
+    .hero {
+
+        min-height: 75vh;
+
+        padding-top: 50px;
     }
 
-    .hero {
-        padding-top: 45px;
+    .hero h1 {
+
+        letter-spacing: -4px;
     }
+
+    .section {
+
+        padding: 75px 18px;
+    }
+
 }
 
 </style>
+
 </head>
 
+
 <body>
+
+
+<!-- NAV -->
 
 <nav class="nav">
 
@@ -825,31 +1513,65 @@ footer {
 
 </div>
 
+
 <div class="nav-links">
 
-<a href="#about" data-en="About" data-fil="Tungkol">About</a>
-
-<a href="#products" data-en="Products" data-fil="Mga Produkto">
-Products
+<a
+    class="nav-link"
+    href="#about"
+    data-en="About"
+    data-fil="Tungkol"
+>
+About
 </a>
 
-<a href="#mission" data-en="Mission" data-fil="Misyon">
-Mission
+<a
+    class="nav-link"
+    href="#products"
+    data-en="Collection"
+    data-fil="Koleksyon"
+>
+Collection
 </a>
 
-<a href="#contact" data-en="Contact" data-fil="Kontak">
+<a
+    class="nav-link"
+    href="#mission"
+    data-en="Our Vision"
+    data-fil="Ating Bisyon"
+>
+Our Vision
+</a>
+
+<a
+    class="nav-link"
+    href="#contact"
+    data-en="Contact"
+    data-fil="Kontak"
+>
 Contact
 </a>
 
-<a href="{{ url_for('staff_login') }}">
+<a
+    class="nav-link"
+    href="/staff/login"
+>
 Staff
 </a>
 
-<button class="nav-button" onclick="toggleLanguage()" id="languageButton">
+<button
+    class="nav-btn"
+    onclick="toggleLanguage()"
+    id="languageButton"
+>
 🇵🇭 Filipino
 </button>
 
-<button class="nav-button" onclick="toggleDark()" id="themeButton">
+<button
+    class="nav-btn"
+    onclick="toggleDark()"
+    id="themeButton"
+>
 🌙
 </button>
 
@@ -860,9 +1582,11 @@ Staff
 </nav>
 
 
+<!-- HERO -->
+
 <section class="hero">
 
-<div class="hero-inner">
+<div class="hero-content reveal">
 
 <img
     class="hero-logo"
@@ -871,32 +1595,43 @@ Staff
     alt="PADRON"
 >
 
-<div class="badge"
-     data-en="Handcrafted in Liliw, Laguna"
-     data-fil="Gawang-kamay sa Liliw, Laguna">
-Handcrafted in Liliw, Laguna
+<div
+    class="eyebrow"
+    data-en="✦ Handcrafted in Liliw, Laguna"
+    data-fil="✦ Gawang-kamay sa Liliw, Laguna"
+>
+✦ Handcrafted in Liliw, Laguna
 </div>
 
 <h1>PADRON</h1>
 
 <p
-data-en="Filipino footwear shaped by heritage, creativity, craftsmanship and the hands of local artisans."
-data-fil="Sapatos na Pilipino, hinubog ng ating kultura, pagkamalikhain, husay at kamay ng mga lokal na artisan.">
-Filipino footwear shaped by heritage, creativity, craftsmanship and the hands of local artisans.
+    class="hero-text"
+    data-en="Where Filipino heritage meets contemporary footwear. Crafted with creativity, patience and the hands of local artisans."
+    data-fil="Kung saan nagsasama ang kulturang Pilipino at makabagong footwear. Ginawa nang may pagkamalikhain, tiyaga at husay ng mga lokal na artisan."
+>
+Where Filipino heritage meets contemporary footwear.
+Crafted with creativity, patience and the hands of local artisans.
 </p>
 
 <div class="hero-buttons">
 
-<a href="#products" class="btn btn-primary"
-data-en="Explore Products"
-data-fil="Tingnan ang Mga Produkto">
-Explore Products
+<a
+    href="#products"
+    class="btn primary"
+    data-en="Explore Collection ↓"
+    data-fil="Tingnan ang Koleksyon ↓"
+>
+Explore Collection ↓
 </a>
 
-<a href="#about" class="btn btn-secondary"
-data-en="Our Story"
-data-fil="Ang Aming Kuwento">
-Our Story
+<a
+    href="#about"
+    class="btn secondary"
+    data-en="Discover PADRON"
+    data-fil="Tuklasin ang PADRON"
+>
+Discover PADRON
 </a>
 
 </div>
@@ -906,65 +1641,129 @@ Our Story
 </section>
 
 
-<section class="section" id="about">
+<!-- ABOUT -->
+
+<section
+    class="section reveal"
+    id="about"
+>
 
 <div class="section-inner">
 
-<h2 class="section-title"
-data-en="Our Story"
-data-fil="Ang Aming Kuwento">
+<div
+    class="section-tag"
+    data-en="Our Story"
+    data-fil="Ang Aming Kuwento"
+>
 Our Story
+</div>
+
+<h2
+    class="section-title"
+    data-en="Made with meaning."
+    data-fil="Ginawa nang may kahulugan."
+>
+Made with meaning.
 </h2>
 
-<p class="section-subtitle">
-
-Golden Zapatillas Corporation is a family-owned business established in
-<strong>2015</strong>, continuing a family tradition of manufacturing
-high-quality footwear in Liliw, Laguna.
+<p
+    class="section-subtitle"
+>
+Golden Zapatillas Corporation is a family-owned business
+established in <strong>2015</strong>, continuing a family
+tradition of manufacturing high-quality footwear in
+Liliw, Laguna.
 
 <br><br>
 
-Our artisans include artist painters, beadworkers, embroiderers and
-shoemakers. We use locally sourced materials such as abaca, Ifugao fabric
-and Inabel to support Filipino suppliers and bring Filipino craftsmanship
-into world-class footwear.
-
+Our artisans include artist painters, beadworkers,
+embroiderers and shoemakers. We use locally sourced
+materials such as abaca, Ifugao fabric and Inabel to
+support Filipino suppliers and create footwear with a
+distinct Filipino touch.
 </p>
 
 
-<div class="about-grid">
+<div class="story-grid">
 
-<div class="info-card">
+<div class="story-card">
 
-<h3>🇵🇭 Filipino Craft</h3>
+<div class="story-icon">
+🎨
+</div>
 
-<p>
-Every design celebrates Filipino creativity, heritage and the craftsmanship
-of Laguna artisans.
+<h3
+    data-en="Artistry"
+    data-fil="Sining"
+>
+Artistry
+</h3>
+
+<p
+    data-en="Every piece reflects the creativity and skill of Filipino artisans."
+    data-fil="Bawat piraso ay sumasalamin sa pagkamalikhain at husay ng mga Pilipinong artisan."
+>
+Every piece reflects the creativity and skill of Filipino artisans.
 </p>
 
 </div>
 
 
-<div class="info-card">
+<div class="story-card">
 
-<h3>🌿 Local Materials</h3>
+<div class="story-icon">
+🌿
+</div>
+
+<h3
+    data-en="Local Materials"
+    data-fil="Lokal na Materyales"
+>
+Local Materials
+</h3>
 
 <p>
-We work with materials including abaca, Ifugao fabric and Inabel while
-supporting local suppliers.
+Abaca, Ifugao fabric and Inabel connect every design
+to Filipino communities and traditions.
 </p>
 
 </div>
 
 
-<div class="info-card">
+<div class="story-card">
 
-<h3>✨ PADRON</h3>
+<div class="story-icon">
+🧵
+</div>
+
+<h3
+    data-en="Craftsmanship"
+    data-fil="Pagkakayari"
+>
+Craftsmanship
+</h3>
 
 <p>
-"Padron" means "pattern" in Spanish. Every footwear design begins with
-a pattern before becoming the finished piece.
+From pattern to finished footwear, every stage is
+shaped by human hands and experience.
+</p>
+
+</div>
+
+
+<div class="story-card">
+
+<div class="story-icon">
+✨
+</div>
+
+<h3>
+PADRON
+</h3>
+
+<p>
+"Padron" means "pattern" in Spanish — the beginning
+of every footwear design.
 </p>
 
 </div>
@@ -976,36 +1775,111 @@ a pattern before becoming the finished piece.
 </section>
 
 
-<section class="section" id="products">
+<!-- PRODUCTS -->
+
+<section
+    class="section products-section reveal"
+    id="products"
+>
 
 <div class="section-inner">
 
-<h2 class="section-title"
-data-en="Our Products"
-data-fil="Aming Mga Produkto">
-Our Products
+<div class="section-tag">
+PADRON COLLECTION
+</div>
+
+<h2
+    class="section-title"
+    data-en="Crafted to be remembered."
+    data-fil="Ginawang hindi malilimutan."
+>
+Crafted to be remembered.
 </h2>
 
-<p class="section-subtitle"
-data-en="Explore handcrafted footwear inspired by the creativity and skills of Filipino artisans."
-data-fil="Tuklasin ang handmade footwear na hango sa pagkamalikhain at husay ng mga Pilipinong artisan.">
-Explore handcrafted footwear inspired by the creativity and skills of Filipino artisans.
+<p
+    class="section-subtitle"
+    data-en="Explore our handcrafted footwear categories."
+    data-fil="Tuklasin ang aming mga handcrafted footwear."
+>
+Explore our handcrafted footwear categories.
 </p>
 
 
-<div class="products-grid">
+<input
+    id="search"
+    class="search"
+    type="search"
+    placeholder="Search the collection..."
+    oninput="filterProducts()"
+>
+
+
+<div class="filters">
+
+<button
+    class="filter active"
+    onclick="setFilter('all', this)"
+>
+All
+</button>
+
+<button
+    class="filter"
+    onclick="setFilter('Mules', this)"
+>
+Mules
+</button>
+
+<button
+    class="filter"
+    onclick="setFilter('Flats', this)"
+>
+Flats
+</button>
+
+<button
+    class="filter"
+    onclick="setFilter('Platform', this)"
+>
+Platform
+</button>
+
+<button
+    class="filter"
+    onclick="setFilter('Wedges', this)"
+>
+Wedges
+</button>
+
+</div>
+
+
+<div class="products" id="productsGrid">
 
 {% for product in products %}
 
-<div class="product">
+<article
+    class="product"
+    data-category="{{ product.category }}"
+    data-name="{{ product.name|lower }}"
+>
+
+{% if product.featured %}
+
+<div class="featured">
+FEATURED
+</div>
+
+{% endif %}
+
 
 <div class="product-art">
 
-{% if "wedge" in product["name"].lower() %}
+{% if "wedge" in product.name.lower() %}
 👡
-{% elif "flat" in product["name"].lower() %}
+{% elif "flat" in product.name.lower() %}
 🥿
-{% elif "mule" in product["name"].lower() %}
+{% elif "mule" in product.name.lower() %}
 🩴
 {% else %}
 👞
@@ -1013,30 +1887,42 @@ Explore handcrafted footwear inspired by the creativity and skills of Filipino a
 
 </div>
 
-<h3>{{ product["name"] }}</h3>
 
-<p>{{ product["description"] }}</p>
+<h3>
+{{ product.name }}
+</h3>
 
-<div class="price">
 
-{% if product["price"] > 0 %}
-₱{{ "%.2f"|format(product["price"]) }}
-{% else %}
-Price available soon
+<p>
+{{ product.description }}
+</p>
+
+
+<div class="product-meta">
+
+<span class="pill">
+{{ product.category }}
+</span>
+
+{% if product.material %}
+
+<span class="pill">
+{{ product.material }}
+</span>
+
+{% endif %}
+
+{% if product.color %}
+
+<span class="pill">
+{{ product.color }}
+</span>
+
 {% endif %}
 
 </div>
 
-<div class="stock">
-
-{{ product["category"] }}
-{% if product["material"] %}
-· {{ product["material"] }}
-{% endif %}
-
-</div>
-
-</div>
+</article>
 
 {% endfor %}
 
@@ -1047,41 +1933,74 @@ Price available soon
 </section>
 
 
-<section class="section mission" id="mission">
+<!-- MISSION -->
+
+<section
+    class="section mission reveal"
+    id="mission"
+>
 
 <div class="section-inner">
 
-<h2 class="section-title"
-data-en="Mission"
-data-fil="Misyon">
-Mission
+<div class="section-tag">
+OUR PURPOSE
+</div>
+
+<h2
+    class="section-title"
+    data-en="Our Mission"
+    data-fil="Aming Misyon"
+>
+Our Mission
 </h2>
 
 <p class="section-subtitle">
 
-To empower Filipino artisans, including shoemakers and women artisans
-skilled in handpainting, embroidery and crochet, by creating sustainable,
-high-quality footwear that celebrates local heritage and craftsmanship.
+To empower Filipino artisans, including shoemakers
+and women artisans skilled in handpainting,
+embroidery and crochet, by creating sustainable,
+high-quality footwear that celebrates local heritage
+and craftsmanship.
 
 <br><br>
 
-We aim to foster economic growth in Liliw and preserve our family's
-footwear-making legacy established in <strong>1963</strong>.
+We strive to foster economic growth in Liliw and
+preserve our family's footwear-making legacy
+established in <strong>1963</strong>.
 
 </p>
 
 
-<h2 class="section-title"
-data-en="Vision"
-data-fil="Bisyon">
-Vision
+<div class="quote">
+
+“Preserving heritage.
+Empowering artisans.
+Creating the future of Filipino footwear.”
+
+</div>
+
+
+<br><br>
+
+
+<div class="section-tag">
+OUR VISION
+</div>
+
+<h2
+    class="section-title"
+    data-en="A future made by hand."
+    data-fil="Kinabukasang gawa ng kamay."
+>
+A future made by hand.
 </h2>
 
 <p class="section-subtitle">
 
-To be one of the leading pioneers in sustainable, handcrafted footwear,
-inspiring a new generation of artisans, preserving our family's legacy,
-and positioning Liliw as a center of footwear excellence.
+To be one of the leading pioneers in sustainable,
+handcrafted footwear while inspiring a new generation
+of artisans and positioning Liliw as a center of
+footwear excellence.
 
 </p>
 
@@ -1090,11 +2009,22 @@ and positioning Liliw as a center of footwear excellence.
 </section>
 
 
-<section class="contact" id="contact">
+<!-- CONTACT -->
+
+<section
+    class="contact reveal"
+    id="contact"
+>
 
 <div class="contact-box">
 
-<h2>PADRON</h2>
+<div class="section-tag">
+VISIT PADRON
+</div>
+
+<h2>
+PADRON
+</h2>
 
 <p class="contact-line">
 📍 {{ store_address }}
@@ -1108,16 +2038,31 @@ and positioning Liliw as a center of footwear excellence.
 🇵🇭 Liliw, Laguna, Philippines
 </p>
 
+<br>
+
+<a
+    class="btn primary"
+    href="https://www.google.com/maps/search/?api=1&query=268+A.+Mabini+Street,+Liliw,+Laguna"
+    target="_blank"
+    rel="noopener"
+>
+📍 Open in Maps
+</a>
+
 </div>
 
 </section>
 
 
+<!-- FOOTER -->
+
 <footer>
 
-<p>PADRON · Filipino Handcrafted Footwear</p>
+<strong>PADRON</strong>
 
-<p>By JHR</p>
+<div class="by">
+By JHR
+</div>
 
 </footer>
 
@@ -1127,40 +2072,87 @@ and positioning Liliw as a center of footwear excellence.
 
 <script>
 
-let language = localStorage.getItem("padron-language") || "en";
+/* =========================================================
+   LANGUAGE
+========================================================= */
 
-let dark = localStorage.getItem("padron-dark") === "true";
+let language =
+    localStorage.getItem("padron-language")
+    || "en";
 
 
 function updateLanguage() {
 
-    document.querySelectorAll("[data-en]").forEach(element => {
+    document
+        .querySelectorAll("[data-en]")
+        .forEach(element => {
 
-        if (language === "fil") {
-            element.textContent = element.dataset.fil;
-        } else {
-            element.textContent = element.dataset.en;
-        }
+            element.textContent =
+                language === "fil"
+                ? element.dataset.fil
+                : element.dataset.en;
 
-    });
+        });
 
-    document.getElementById("languageButton").textContent =
-        language === "fil" ? "🇺🇸 English" : "🇵🇭 Filipino";
 
-    localStorage.setItem("padron-language", language);
+    document.getElementById(
+        "languageButton"
+    ).textContent =
+        language === "fil"
+        ? "🇺🇸 English"
+        : "🇵🇭 Filipino";
+
+
+    localStorage.setItem(
+        "padron-language",
+        language
+    );
 }
 
 
 function toggleLanguage() {
 
-    language = language === "en" ? "fil" : "en";
+    language =
+        language === "en"
+        ? "fil"
+        : "en";
 
     updateLanguage();
 
     showToast(
         language === "fil"
-        ? "Filipino language selected"
-        : "English language selected"
+        ? "Filipino selected 🇵🇭"
+        : "English selected 🇺🇸"
+    );
+}
+
+
+/* =========================================================
+   DARK MODE
+========================================================= */
+
+let dark =
+    localStorage.getItem("padron-dark")
+    === "true";
+
+
+function updateTheme() {
+
+    document.body.classList.toggle(
+        "dark",
+        dark
+    );
+
+    document.getElementById(
+        "themeButton"
+    ).textContent =
+        dark
+        ? "☀️"
+        : "🌙";
+
+    localStorage.setItem(
+        "padron-dark",
+        dark
     );
 }
 
@@ -1169,135 +2161,355 @@ function toggleDark() {
 
     dark = !dark;
 
-    document.body.classList.toggle("dark", dark);
+    updateTheme();
 
-    document.getElementById("themeButton").textContent =
-        dark ? "☀️" : "🌙";
-
-    localStorage.setItem("padron-dark", dark);
+    showToast(
+        dark
+        ? "Dark mode enabled"
+        : "Light mode enabled"
+    );
 }
 
+
+/* =========================================================
+   PRODUCT FILTER
+========================================================= */
+
+let currentFilter = "all";
+
+
+function setFilter(
+    filter,
+    button
+) {
+
+    currentFilter = filter;
+
+    document
+        .querySelectorAll(".filter")
+        .forEach(
+            item =>
+                item.classList.remove("active")
+        );
+
+    button.classList.add("active");
+
+    filterProducts();
+}
+
+
+function filterProducts() {
+
+    const search =
+        document
+            .getElementById("search")
+            .value
+            .toLowerCase()
+            .trim();
+
+
+    document
+        .querySelectorAll(".product")
+        .forEach(product => {
+
+            const category =
+                product.dataset.category;
+
+            const name =
+                product.dataset.name;
+
+
+            const categoryMatch =
+                currentFilter === "all"
+                ||
+                category === currentFilter;
+
+
+            const searchMatch =
+                !search
+                ||
+                name.includes(search)
+                ||
+                category.toLowerCase()
+                    .includes(search);
+
+
+            if (
+                categoryMatch
+                &&
+                searchMatch
+            ) {
+
+                product.style.display = "";
+
+                setTimeout(() => {
+                    product.style.opacity = "1";
+                }, 10);
+
+            } else {
+
+                product.style.opacity = "0";
+
+                setTimeout(() => {
+                    product.style.display = "none";
+                }, 180);
+
+            }
+
+        });
+}
+
+
+/* =========================================================
+   TOAST
+========================================================= */
 
 function showToast(message) {
 
-    const toast = document.getElementById("toast");
+    const toast =
+        document.getElementById("toast");
 
     toast.textContent = message;
+
     toast.classList.add("show");
 
-    setTimeout(() => {
-        toast.classList.remove("show");
-    }, 2200);
+    setTimeout(
+        () => toast.classList.remove("show"),
+        2200
+    );
 }
 
 
-document.body.classList.toggle("dark", dark);
+/* =========================================================
+   SCROLL ANIMATIONS
+========================================================= */
 
-document.getElementById("themeButton").textContent =
-    dark ? "☀️" : "🌙";
+const observer =
+    new IntersectionObserver(
+        entries => {
+
+            entries.forEach(entry => {
+
+                if (
+                    entry.isIntersecting
+                ) {
+
+                    entry.target.classList.add(
+                        "visible"
+                    );
+
+                }
+
+            });
+
+        },
+        {
+            threshold: .12
+        }
+    );
+
+
+document
+    .querySelectorAll(".reveal")
+    .forEach(
+        element =>
+            observer.observe(element)
+    );
+
+
+/* =========================================================
+   INITIALIZATION
+========================================================= */
+
+updateTheme();
 
 updateLanguage();
 
 </script>
 
 </body>
+
 </html>
 """
 
 
 # ============================================================
-# LOGIN HTML
+# LOGIN PAGE
 # ============================================================
 
 LOGIN_PAGE = r"""
 <!DOCTYPE html>
-<html lang="en">
+
+<html>
 
 <head>
 
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<title>PADRON Staff Login</title>
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
+
+<title>PADRON Staff</title>
 
 <style>
+
+@import url(
+    'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap'
+);
 
 * {
     box-sizing: border-box;
 }
 
 body {
+
     margin: 0;
+
     min-height: 100vh;
+
     display: grid;
+
     place-items: center;
+
     padding: 20px;
-    font-family: Arial, sans-serif;
-    color: #3a2418;
+
+    font-family: "DM Sans", sans-serif;
+
+    color: #2e1c14;
+
     background:
-        radial-gradient(circle at 20% 20%, #e7c7a8, transparent 30%),
-        radial-gradient(circle at 80% 80%, #c99a72, transparent 30%),
-        #f7efe5;
+        radial-gradient(
+            circle at 15% 15%,
+            #e6c5a3,
+            transparent 30%
+        ),
+        radial-gradient(
+            circle at 85% 85%,
+            #c9966e,
+            transparent 30%
+        ),
+        #f5ede3;
 }
 
 .login {
+
     width: min(430px, 100%);
-    background: #fffaf4;
-    border: 1px solid rgba(80,50,30,.15);
-    border-radius: 35px;
-    padding: 40px;
-    box-shadow: 0 25px 80px rgba(80,50,30,.2);
+
+    padding: 45px;
+
     text-align: center;
+
+    background: #fffaf4;
+
+    border:
+        1px solid
+        rgba(80,50,30,.12);
+
+    border-radius: 35px;
+
+    box-shadow:
+        0 30px 90px
+        rgba(70,40,20,.2);
 }
 
 .logo {
-    width: 90px;
-    height: 90px;
+
+    width: 100px;
+    height: 100px;
+
     object-fit: contain;
+
     border-radius: 20px;
 }
 
 h1 {
-    margin-bottom: 5px;
+
+    font-family:
+        "Playfair Display",
+        serif;
+
+    font-size: 48px;
+
+    margin:
+        15px 0 5px;
 }
 
 p {
-    color: #806858;
+
+    color: #806b5b;
 }
 
 input {
+
     width: 100%;
+
     padding: 15px;
-    margin: 8px 0;
-    border: 1px solid #ddc7b1;
+
+    margin: 7px 0;
+
+    border:
+        1px solid
+        #dfc9b5;
+
     border-radius: 15px;
+
     outline: none;
+
+    background: white;
 }
 
 button {
+
     width: 100%;
-    border: 0;
+
     padding: 15px;
+
     margin-top: 12px;
+
+    border: 0;
+
     border-radius: 999px;
+
     color: white;
-    background: linear-gradient(135deg, #8a5a3b, #b47b55);
+
+    background:
+        linear-gradient(
+            135deg,
+            #75452d,
+            #a86d49
+        );
+
     font-weight: 800;
+
     cursor: pointer;
 }
 
 .error {
-    color: #a33b2b;
-    background: #f9d9d1;
-    padding: 10px;
-    border-radius: 12px;
+
+    margin-bottom: 15px;
+
+    padding: 11px;
+
+    color: #8e3328;
+
+    background: #f5d5ce;
+
+    border-radius: 13px;
 }
 
 .back {
+
     display: block;
-    margin-top: 20px;
-    color: #8a5a3b;
+
+    margin-top: 22px;
+
+    color: #75452d;
+
     text-decoration: none;
+
+    font-weight: 700;
 }
 
 </style>
@@ -1320,72 +2532,90 @@ button {
 <p>Staff Portal</p>
 
 {% if error %}
-<div class="error">{{ error }}</div>
+
+<div class="error">
+{{ error }}
+</div>
+
 {% endif %}
 
 <form method="POST">
 
 <input
-    type="text"
     name="username"
+    type="text"
     placeholder="Username"
     autocomplete="username"
     required
 >
 
 <input
-    type="password"
     name="password"
+    type="password"
     placeholder="Password"
     autocomplete="current-password"
     required
 >
 
-<button type="submit">
-Sign In
+<button>
+Enter Staff Portal
 </button>
 
 </form>
 
-<a class="back" href="/">
-← Back to website
+<a
+    class="back"
+    href="/"
+>
+← Return to PADRON
 </a>
 
 </div>
 
 </body>
+
 </html>
 """
 
 
 # ============================================================
-# STAFF DASHBOARD HTML
+# STAFF PAGE
 # ============================================================
 
 STAFF_PAGE = r"""
 <!DOCTYPE html>
-<html lang="en">
+
+<html>
 
 <head>
 
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
 
 <title>PADRON Staff Dashboard</title>
 
 <style>
 
+@import url(
+    'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap'
+);
+
 :root {
-    --bg:#f7efe5;
-    --surface:#fffaf4;
-    --surface2:#ead6c1;
-    --text:#3a2418;
-    --muted:#806858;
-    --brown:#8a5a3b;
-    --brown2:#b47b55;
-    --red:#b34a3c;
-    --green:#467d56;
-    --border:rgba(70,40,20,.14);
+
+    --bg:#f5ede3;
+    --card:#fffaf4;
+    --card2:#ead9c7;
+    --text:#2e1c14;
+    --muted:#806b5b;
+    --brown:#75452d;
+    --brown2:#a86d49;
+    --red:#a33d32;
+    --green:#477651;
+    --border:rgba(70,40,20,.12);
 }
 
 * {
@@ -1393,197 +2623,344 @@ STAFF_PAGE = r"""
 }
 
 body {
+
     margin:0;
-    font-family:Arial,sans-serif;
+
     color:var(--text);
+
     background:
-        radial-gradient(circle at 10% 10%,#e8c7a5,transparent 25%),
+        radial-gradient(
+            circle at 5% 5%,
+            #e7c8a8,
+            transparent 25%
+        ),
         var(--bg);
+
+    font-family:"DM Sans",sans-serif;
 }
 
 header {
+
     position:sticky;
+
     top:0;
+
     z-index:10;
-    background:rgba(255,250,244,.9);
-    backdrop-filter:blur(15px);
-    border-bottom:1px solid var(--border);
+
+    background:
+        rgba(255,250,244,.9);
+
+    backdrop-filter:blur(18px);
+
+    border-bottom:
+        1px solid var(--border);
 }
 
-.header-inner {
+.header {
+
     max-width:1250px;
+
     margin:auto;
-    padding:18px 20px;
+
+    padding:16px 20px;
+
     display:flex;
-    align-items:center;
+
     justify-content:space-between;
+
+    align-items:center;
+
     gap:15px;
 }
 
-.logo-title {
+.logo {
+
     font-weight:900;
-    letter-spacing:3px;
+
+    letter-spacing:4px;
 }
 
 .actions {
+
     display:flex;
+
     gap:8px;
+
     flex-wrap:wrap;
 }
 
-.button {
+.btn {
+
     border:0;
-    border-radius:999px;
+
     padding:11px 17px;
-    cursor:pointer;
-    background:var(--surface2);
+
+    border-radius:999px;
+
+    background:var(--card2);
+
     color:var(--text);
+
     text-decoration:none;
+
     font-weight:700;
+
+    cursor:pointer;
 }
 
-.button.primary {
+.primary {
+
     color:white;
-    background:linear-gradient(135deg,var(--brown),var(--brown2));
+
+    background:
+        linear-gradient(
+            135deg,
+            var(--brown),
+            var(--brown2)
+        );
 }
 
-.button.danger {
+.danger {
+
     color:white;
+
     background:var(--red);
 }
 
 .container {
+
     max-width:1250px;
+
     margin:auto;
-    padding:40px 20px 80px;
+
+    padding:45px 20px 90px;
 }
 
 h1 {
-    font-size:48px;
-    margin-bottom:5px;
+
+    font-family:
+        "Playfair Display",
+        serif;
+
+    font-size:55px;
+
+    margin:
+        0 0 5px;
 }
 
 .subtitle {
+
     color:var(--muted);
 }
 
 .stats {
+
     display:grid;
-    grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
-    gap:15px;
-    margin:30px 0;
+
+    grid-template-columns:
+        repeat(
+            auto-fit,
+            minmax(200px,1fr)
+        );
+
+    gap:16px;
+
+    margin:35px 0;
 }
 
 .stat {
-    background:var(--surface);
-    border:1px solid var(--border);
+
+    background:var(--card);
+
+    border:
+        1px solid var(--border);
+
     border-radius:25px;
+
     padding:25px;
+
+    box-shadow:
+        0 15px 40px
+        rgba(80,50,30,.07);
 }
 
 .stat-number {
-    font-size:40px;
+
+    margin-top:8px;
+
+    font-size:42px;
+
     font-weight:900;
+
     color:var(--brown);
 }
 
 .card {
-    background:var(--surface);
-    border:1px solid var(--border);
-    border-radius:28px;
-    padding:25px;
+
     margin-top:25px;
+
+    padding:25px;
+
+    background:var(--card);
+
+    border:
+        1px solid var(--border);
+
+    border-radius:28px;
+
     overflow:hidden;
 }
 
 .card h2 {
+
+    font-family:
+        "Playfair Display",
+        serif;
+
+    font-size:30px;
+
     margin-top:0;
 }
 
 .table-wrap {
+
     overflow:auto;
+
+    margin-top:20px;
 }
 
 table {
+
     width:100%;
+
+    min-width:950px;
+
     border-collapse:collapse;
-    min-width:900px;
 }
 
 th,
 td {
+
     padding:13px 10px;
-    border-bottom:1px solid var(--border);
+
+    border-bottom:
+        1px solid var(--border);
+
     text-align:left;
 }
 
 th {
+
     color:var(--brown);
+
+    font-size:13px;
 }
 
 input,
 select,
 textarea {
+
     width:100%;
-    padding:11px;
-    border:1px solid var(--border);
+
+    padding:10px;
+
+    border:
+        1px solid var(--border);
+
     border-radius:10px;
+
     background:white;
-    color:#2c1c13;
+
+    color:#2e1c14;
+
+    outline:none;
 }
 
 textarea {
-    min-height:70px;
+
+    min-height:75px;
+
     resize:vertical;
 }
 
-.form-grid {
-    display:grid;
-    grid-template-columns:repeat(2,1fr);
-    gap:15px;
-}
-
-.form-grid .full {
-    grid-column:1/-1;
-}
-
 .add-form {
+
     display:none;
+
+    margin-top:25px;
+
+    padding:20px;
+
+    border-radius:20px;
+
+    background:var(--card2);
 }
 
 .add-form.open {
+
     display:block;
 }
 
-.visitor-table {
+.form-grid {
+
+    display:grid;
+
+    grid-template-columns:
+        repeat(2,1fr);
+
+    gap:15px;
+}
+
+.full {
+
+    grid-column:1/-1;
+}
+
+.label {
+
+    display:block;
+
+    margin-bottom:5px;
+
+    font-size:13px;
+
+    font-weight:700;
+}
+
+.visitors {
+
     max-height:500px;
+
     overflow:auto;
 }
 
 .small {
-    font-size:12px;
-    color:var(--muted);
-}
 
-.badge {
-    display:inline-block;
-    padding:6px 10px;
-    border-radius:999px;
-    background:var(--surface2);
+    color:var(--muted);
+
+    font-size:12px;
 }
 
 @media(max-width:700px) {
 
-    .header-inner {
+    .header {
+
         flex-direction:column;
     }
 
     h1 {
-        font-size:36px;
+
+        font-size:42px;
     }
 
     .form-grid {
+
         grid-template-columns:1fr;
+    }
+
+    .full {
+
+        grid-column:auto;
     }
 
 }
@@ -1596,19 +2973,25 @@ textarea {
 
 <header>
 
-<div class="header-inner">
+<div class="header">
 
-<div class="logo-title">
+<div class="logo">
 PADRON · STAFF
 </div>
 
 <div class="actions">
 
-<a class="button" href="/">
+<a
+    class="btn"
+    href="/"
+>
 View Store
 </a>
 
-<a class="button danger" href="{{ url_for('staff_logout') }}">
+<a
+    class="btn danger"
+    href="/staff/logout"
+>
 Logout
 </a>
 
@@ -1621,21 +3004,23 @@ Logout
 
 <main class="container">
 
-<h1>Staff Dashboard</h1>
+<h1>Dashboard</h1>
 
 <p class="subtitle">
-Manage PADRON products and monitor website activity.
+Welcome back. Manage the PADRON collection from here.
 </p>
 
 
-<section class="stats">
+<div class="stats">
 
 <div class="stat">
 
-<div class="small">TOTAL VISITOR RECORDS</div>
+<div class="small">
+VISITOR RECORDS
+</div>
 
 <div class="stat-number">
-{{ visitor_count }}
+{{ total_visitors }}
 </div>
 
 </div>
@@ -1643,7 +3028,9 @@ Manage PADRON products and monitor website activity.
 
 <div class="stat">
 
-<div class="small">TOTAL STOCK</div>
+<div class="small">
+TOTAL STOCK
+</div>
 
 <div class="stat-number">
 {{ total_stock }}
@@ -1654,7 +3041,9 @@ Manage PADRON products and monitor website activity.
 
 <div class="stat">
 
-<div class="small">PRODUCTS</div>
+<div class="small">
+PRODUCTS
+</div>
 
 <div class="stat-number">
 {{ products|length }}
@@ -1662,80 +3051,180 @@ Manage PADRON products and monitor website activity.
 
 </div>
 
-</section>
 
+<div class="stat">
+
+<div class="small">
+LOW STOCK
+</div>
+
+<div class="stat-number">
+{{ low_stock }}
+</div>
+
+</div>
+
+</div>
+
+
+<!-- PRODUCTS -->
 
 <section class="card">
 
-<h2>Products</h2>
+<h2>Product Collection</h2>
 
-<button class="button primary"
-onclick="document.getElementById('addForm').classList.toggle('open')">
-
-＋ Add Product
-
+<button
+    class="btn primary"
+    onclick="toggleAdd()"
+>
+＋ Add New Product
 </button>
 
 
-<div id="addForm" class="add-form">
-
-<br>
+<div
+    id="addForm"
+    class="add-form"
+>
 
 <div class="form-grid">
 
 <div>
-<label>Name</label>
+
+<label class="label">
+Product Name
+</label>
+
 <input id="new-name">
+
 </div>
 
-<div>
-<label>Category</label>
-<input id="new-category" value="Footwear">
-</div>
 
 <div>
-<label>Price</label>
-<input id="new-price" type="number" step="0.01" value="0">
+
+<label class="label">
+Category
+</label>
+
+<input
+    id="new-category"
+    value="Footwear"
+>
+
 </div>
 
-<div>
-<label>Stock</label>
-<input id="new-stock" type="number" value="0">
-</div>
 
 <div>
-<label>Sizes</label>
-<input id="new-sizes" placeholder="35,36,37,38,39,40">
+
+<label class="label">
+Price
+</label>
+
+<input
+    id="new-price"
+    type="number"
+    step="0.01"
+    value="0"
+>
+
 </div>
 
-<div>
-<label>Material</label>
-<input id="new-material" placeholder="Abaca">
-</div>
 
 <div>
-<label>Color</label>
+
+<label class="label">
+Stock
+</label>
+
+<input
+    id="new-stock"
+    type="number"
+    value="0"
+>
+
+</div>
+
+
+<div>
+
+<label class="label">
+Sizes
+</label>
+
+<input
+    id="new-sizes"
+    placeholder="35,36,37,38,39,40"
+>
+
+</div>
+
+
+<div>
+
+<label class="label">
+Material
+</label>
+
+<input
+    id="new-material"
+    placeholder="Abaca"
+>
+
+</div>
+
+
+<div>
+
+<label class="label">
+Color
+</label>
+
 <input id="new-color">
+
 </div>
 
+
 <div>
-<label>Featured</label>
+
+<label class="label">
+Featured
+</label>
+
 <select id="new-featured">
-<option value="0">No</option>
-<option value="1">Yes</option>
+
+<option value="0">
+No
+</option>
+
+<option value="1">
+Yes
+</option>
+
 </select>
+
 </div>
+
 
 <div class="full">
-<label>Description</label>
-<textarea id="new-description"></textarea>
+
+<label class="label">
+Description
+</label>
+
+<textarea
+    id="new-description"
+></textarea>
+
 </div>
 
 </div>
+
 
 <br>
 
-<button class="button primary" onclick="addProduct()">
+<button
+    class="btn primary"
+    onclick="addProduct()"
+>
 Save Product
 </button>
 
@@ -1749,17 +3238,43 @@ Save Product
 <thead>
 
 <tr>
-<th>Name</th>
-<th>Category</th>
-<th>Price</th>
-<th>Stock</th>
-<th>Sizes</th>
-<th>Material</th>
-<th>Featured</th>
-<th>Action</th>
+
+<th>
+Name
+</th>
+
+<th>
+Category
+</th>
+
+<th>
+Price
+</th>
+
+<th>
+Stock
+</th>
+
+<th>
+Sizes
+</th>
+
+<th>
+Material
+</th>
+
+<th>
+Featured
+</th>
+
+<th>
+Actions
+</th>
+
 </tr>
 
 </thead>
+
 
 <tbody>
 
@@ -1768,38 +3283,87 @@ Save Product
 <tr data-id="{{ p.id }}">
 
 <td>
-<input class="name" value="{{ p.name }}">
+
+<input
+    class="name"
+    value="{{ p.name }}"
+>
+
 </td>
 
-<td>
-<input class="category" value="{{ p.category }}">
-</td>
 
 <td>
-<input class="price" type="number" step="0.01" value="{{ p.price }}">
+
+<input
+    class="category"
+    value="{{ p.category }}"
+>
+
 </td>
 
-<td>
-<input class="stock" type="number" value="{{ p.stock }}">
-</td>
 
 <td>
-<input class="sizes" value="{{ p.sizes }}">
+
+<input
+    class="price"
+    type="number"
+    step="0.01"
+    value="{{ p.price }}"
+>
+
 </td>
 
+
 <td>
-<input class="material" value="{{ p.material }}">
+
+<input
+    class="stock"
+    type="number"
+    value="{{ p.stock }}"
+>
+
 </td>
+
+
+<td>
+
+<input
+    class="sizes"
+    value="{{ p.sizes }}"
+>
+
+</td>
+
+
+<td>
+
+<input
+    class="material"
+    value="{{ p.material }}"
+>
+
+</td>
+
 
 <td>
 
 <select class="featured">
 
-<option value="0" {% if not p.featured %}selected{% endif %}>
+<option
+    value="0"
+    {% if not p.featured %}
+    selected
+    {% endif %}
+>
 No
 </option>
 
-<option value="1" {% if p.featured %}selected{% endif %}>
+<option
+    value="1"
+    {% if p.featured %}
+    selected
+    {% endif %}
+>
 Yes
 </option>
 
@@ -1807,15 +3371,20 @@ Yes
 
 </td>
 
+
 <td>
 
-<button class="button primary"
-onclick="saveProduct({{ p.id }})">
+<button
+    class="btn primary"
+    onclick="saveProduct({{ p.id }})"
+>
 Save
 </button>
 
-<button class="button danger"
-onclick="deleteProduct({{ p.id }})">
+<button
+    class="btn danger"
+    onclick="deleteProduct({{ p.id }})"
+>
 Delete
 </button>
 
@@ -1834,43 +3403,58 @@ Delete
 </section>
 
 
+<!-- VISITORS -->
+
 <section class="card">
 
-<div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap">
-
-<div>
-
-<h2>Visitor Activity</h2>
+<h2>
+Visitor Activity
+</h2>
 
 <p class="small">
-IP address, user agent, language and page information received by the server.
+
+This dashboard stores basic server-side traffic information
+for operational analytics. Avoid using it to identify individual
+visitors without an appropriate legal basis or notice.
+
 </p>
 
-</div>
-
-<button class="button danger"
-onclick="clearVisitors()">
-Clear Logs
+<button
+    class="btn danger"
+    onclick="clearVisitors()"
+>
+Clear Visitor Records
 </button>
 
-</div>
 
-
-<div class="visitor-table">
+<div class="visitors">
 
 <table>
 
 <thead>
 
 <tr>
-<th>Time</th>
-<th>IP</th>
-<th>Device / Browser</th>
-<th>Language</th>
-<th>Page</th>
+
+<th>
+Time
+</th>
+
+<th>
+Device / Browser
+</th>
+
+<th>
+Language
+</th>
+
+<th>
+Page
+</th>
+
 </tr>
 
 </thead>
+
 
 <tbody>
 
@@ -1883,10 +3467,6 @@ Clear Logs
 </td>
 
 <td>
-{{ visitor.ip }}
-</td>
-
-<td style="max-width:450px">
 {{ visitor.user_agent }}
 </td>
 
@@ -1915,153 +3495,307 @@ Clear Logs
 
 <script>
 
+function toggleAdd() {
+
+    document
+        .getElementById("addForm")
+        .classList.toggle("open");
+
+}
+
+
 async function addProduct() {
 
     const data = {
-        name: document.getElementById("new-name").value,
-        category: document.getElementById("new-category").value,
-        price: document.getElementById("new-price").value,
-        stock: document.getElementById("new-stock").value,
-        sizes: document.getElementById("new-sizes").value,
-        material: document.getElementById("new-material").value,
-        color: document.getElementById("new-color").value,
-        featured: document.getElementById("new-featured").value === "1",
-        description: document.getElementById("new-description").value
+
+        name:
+            document.getElementById(
+                "new-name"
+            ).value,
+
+        category:
+            document.getElementById(
+                "new-category"
+            ).value,
+
+        price:
+            document.getElementById(
+                "new-price"
+            ).value,
+
+        stock:
+            document.getElementById(
+                "new-stock"
+            ).value,
+
+        sizes:
+            document.getElementById(
+                "new-sizes"
+            ).value,
+
+        material:
+            document.getElementById(
+                "new-material"
+            ).value,
+
+        color:
+            document.getElementById(
+                "new-color"
+            ).value,
+
+        featured:
+            document.getElementById(
+                "new-featured"
+            ).value === "1",
+
+        description:
+            document.getElementById(
+                "new-description"
+            ).value
+
     };
 
-    const response = await fetch("/api/products", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify(data)
-    });
 
-    const result = await response.json();
+    const response =
+        await fetch(
+            "/api/products",
+            {
+                method: "POST",
+
+                headers: {
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body:
+                    JSON.stringify(data)
+            }
+        );
+
+
+    const result =
+        await response.json();
+
 
     if (result.success) {
+
         location.reload();
+
     } else {
-        alert(result.message || "Unable to add product.");
+
+        alert(
+            result.message
+            || "Unable to add product."
+        );
+
     }
+
 }
 
 
 async function saveProduct(id) {
 
-    const row = document.querySelector(
-        'tr[data-id="' + id + '"]'
-    );
+    const row =
+        document.querySelector(
+            'tr[data-id="' + id + '"]'
+        );
+
 
     const data = {
-        name: row.querySelector(".name").value,
-        category: row.querySelector(".category").value,
-        price: row.querySelector(".price").value,
-        stock: row.querySelector(".stock").value,
-        sizes: row.querySelector(".sizes").value,
-        material: row.querySelector(".material").value,
-        featured: row.querySelector(".featured").value === "1"
+
+        name:
+            row.querySelector(
+                ".name"
+            ).value,
+
+        category:
+            row.querySelector(
+                ".category"
+            ).value,
+
+        price:
+            row.querySelector(
+                ".price"
+            ).value,
+
+        stock:
+            row.querySelector(
+                ".stock"
+            ).value,
+
+        sizes:
+            row.querySelector(
+                ".sizes"
+            ).value,
+
+        material:
+            row.querySelector(
+                ".material"
+            ).value,
+
+        featured:
+            row.querySelector(
+                ".featured"
+            ).value === "1"
+
     };
 
-    const response = await fetch(
-        "/api/products/" + id,
-        {
-            method:"PUT",
-            headers:{"Content-Type":"application/json"},
-            body:JSON.stringify(data)
-        }
-    );
 
-    const result = await response.json();
+    const response =
+        await fetch(
+            "/api/products/" + id,
+            {
+                method: "PUT",
+
+                headers: {
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body:
+                    JSON.stringify(data)
+            }
+        );
+
+
+    const result =
+        await response.json();
+
 
     if (result.success) {
-        alert("Product updated.");
+
+        alert(
+            "Product updated successfully."
+        );
+
     } else {
-        alert(result.message || "Unable to update product.");
+
+        alert(
+            result.message
+            || "Update failed."
+        );
+
     }
+
 }
 
 
 async function deleteProduct(id) {
 
-    if (!confirm("Delete this product?")) {
+    if (
+        !confirm(
+            "Delete this product permanently?"
+        )
+    ) {
+
         return;
+
     }
 
-    const response = await fetch(
-        "/api/products/" + id,
-        {
-            method:"DELETE"
-        }
-    );
 
-    const result = await response.json();
+    const response =
+        await fetch(
+            "/api/products/" + id,
+            {
+                method: "DELETE"
+            }
+        );
+
+
+    const result =
+        await response.json();
+
 
     if (result.success) {
+
         location.reload();
+
     } else {
-        alert(result.message || "Unable to delete product.");
+
+        alert(
+            result.message
+            || "Delete failed."
+        );
+
     }
+
 }
 
 
 async function clearVisitors() {
 
-    if (!confirm("Delete all visitor logs?")) {
+    if (
+        !confirm(
+            "Clear all visitor records?"
+        )
+    ) {
+
         return;
+
     }
 
-    const response = await fetch(
-        "/api/visitors/clear",
-        {
-            method:"POST"
-        }
-    );
 
-    const result = await response.json();
+    const response =
+        await fetch(
+            "/api/visitors/clear",
+            {
+                method: "POST"
+            }
+        );
+
+
+    const result =
+        await response.json();
+
 
     if (result.success) {
+
         location.reload();
+
     }
+
 }
 
 </script>
 
 </body>
+
 </html>
 """
 
 
 # ============================================================
-# ERROR HANDLERS
+# ERRORS
 # ============================================================
 
 @app.errorhandler(404)
-def not_found(error):
+def page_not_found(error):
+
     return """
-    <div style="font-family:Arial;text-align:center;padding:80px">
+    <div style="
+        font-family:Arial;
+        text-align:center;
+        padding:100px;
+    ">
         <h1>404</h1>
-        <p>Page not found.</p>
+        <p>That page doesn't exist.</p>
         <a href="/">Return to PADRON</a>
     </div>
     """, 404
 
 
-@app.errorhandler(500)
-def server_error(error):
-    return """
-    <div style="font-family:Arial;text-align:center;padding:80px">
-        <h1>Something went wrong.</h1>
-        <p>Please try again.</p>
-        <a href="/">Return to PADRON</a>
-    </div>
-    """, 500
-
-
 # ============================================================
-# RUN LOCALLY
+# LOCAL / RENDER START
 # ============================================================
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+
+    port = int(
+        os.environ.get(
+            "PORT",
+            5000
+        )
+    )
 
     app.run(
         host="0.0.0.0",
