@@ -4,25 +4,22 @@ import hashlib
 import secrets
 from datetime import datetime, timezone
 
-from flask import (
-    Flask, render_template, request, redirect,
-    url_for, session, flash, abort
-)
+from flask import Flask, render_template, request, redirect, url_for, session, flash, abort
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "change-this-secret-key")
+app.secret_key = os.getenv("SECRET_KEY", "CHANGE_THIS_SECRET")
 
-# Needed when deployed behind a reverse proxy.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 DATABASE = os.getenv("DATABASE_PATH", "store.db")
-STAFF_PASSWORD = os.getenv("STAFF_PASSWORD", "change-me-now")
+STAFF_PASSWORD = os.getenv("STAFF_PASSWORD", "CHANGE_THIS_PASSWORD")
+IP_HASH_SALT = os.getenv("IP_HASH_SALT", "CHANGE_THIS_IP_SALT")
 
-STORE_NAME = os.getenv("STORE_NAME", "Luna Steps PH")
+STORE_NAME = "Rafa's Store"
 STORE_ADDRESS = os.getenv(
     "STORE_ADDRESS",
     "Philippines"
@@ -33,20 +30,20 @@ STORE_PHONE = os.getenv(
 )
 STORE_EMAIL = os.getenv(
     "STORE_EMAIL",
-    "hello@example.com"
+    "hello@rafasstore.com"
 )
 
 
 def get_db():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    return conn
+    connection = sqlite3.connect(DATABASE)
+    connection.row_factory = sqlite3.Row
+    return connection
 
 
 def init_db():
-    conn = get_db()
+    connection = get_db()
 
-    conn.executescript("""
+    connection.executescript("""
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -67,13 +64,11 @@ def init_db():
             region TEXT DEFAULT 'Unknown',
             device TEXT DEFAULT 'Unknown',
             browser TEXT DEFAULT 'Unknown',
-            user_agent TEXT DEFAULT '',
             visited_at TEXT NOT NULL
         );
     """)
 
-    # Add sample products only on first run.
-    count = conn.execute(
+    count = connection.execute(
         "SELECT COUNT(*) FROM products"
     ).fetchone()[0]
 
@@ -86,7 +81,7 @@ def init_db():
                 25,
                 "36,37,38,39,40,41,42",
                 "Purple",
-                "https://images.unsplash.com/photo-1603487742131-4160ec999306?auto=format&fit=crop&w=900&q=80"
+                ""
             ),
             (
                 "Lavender Comfort",
@@ -95,49 +90,50 @@ def init_db():
                 18,
                 "36,37,38,39,40",
                 "Lavender",
-                "https://images.unsplash.com/photo-1586350977771-b3b0abd50c82?auto=format&fit=crop&w=900&q=80"
+                ""
             ),
             (
                 "Midnight Purple",
-                "Simple, durable house and outdoor slippers.",
+                "Simple and durable slippers for everyday use.",
                 449,
                 12,
                 "38,39,40,41,42,43",
                 "Dark Purple",
-                "https://images.unsplash.com/photo-1562273138-f46be4ebdf33?auto=format&fit=crop&w=900&q=80"
+                ""
             )
         ]
 
-        conn.executemany("""
-            INSERT INTO products
-            (name, description, price, stock, sizes, color, image_url, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            (*product, datetime.now(timezone.utc).isoformat())
-            for product in products
-        ])
+        for product in products:
+            connection.execute("""
+                INSERT INTO products
+                (
+                    name,
+                    description,
+                    price,
+                    stock,
+                    sizes,
+                    color,
+                    image_url,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                *product,
+                datetime.now(timezone.utc).isoformat()
+            ))
 
-    conn.commit()
-    conn.close()
-
-
-def hash_ip(ip):
-    """
-    Store a privacy-preserving fingerprint rather than exposing
-    the raw IP address in the database.
-    """
-    salt = os.getenv("IP_HASH_SALT", "change-this-ip-salt")
-    return hashlib.sha256(
-        f"{salt}:{ip}".encode("utf-8")
-    ).hexdigest()[:24]
+    connection.commit()
+    connection.close()
 
 
 def get_client_ip():
-    """
-    Gets the client IP when deployed behind a trusted reverse proxy.
-    ProxyFix handles X-Forwarded-For.
-    """
     return request.remote_addr or "unknown"
+
+
+def hash_ip(ip):
+    return hashlib.sha256(
+        f"{IP_HASH_SALT}:{ip}".encode()
+    ).hexdigest()[:24]
 
 
 def detect_device(user_agent):
@@ -145,8 +141,10 @@ def detect_device(user_agent):
 
     if "ipad" in ua or "tablet" in ua:
         return "Tablet"
+
     if "iphone" in ua or "android" in ua:
         return "Mobile"
+
     return "Desktop"
 
 
@@ -155,12 +153,16 @@ def detect_browser(user_agent):
 
     if "edg/" in ua:
         return "Edge"
-    if "chrome/" in ua and "edg/" not in ua:
+
+    if "chrome/" in ua:
         return "Chrome"
+
     if "firefox/" in ua:
         return "Firefox"
-    if "safari/" in ua and "chrome/" not in ua:
+
+    if "safari/" in ua:
         return "Safari"
+
     if "opera" in ua or "opr/" in ua:
         return "Opera"
 
@@ -169,37 +171,43 @@ def detect_browser(user_agent):
 
 def record_visitor():
     """
-    Records coarse analytics only.
+    Privacy-friendly analytics.
 
-    No GPS or exact physical location is collected.
-    Country/region are intentionally left as Unknown unless
-    you connect a privacy-compliant coarse geolocation service.
+    We do not request GPS or precise location.
+    The IP is hashed before storage.
     """
-    ua = request.headers.get("User-Agent", "")
-    raw_ip = get_client_ip()
 
-    conn = get_db()
+    user_agent = request.headers.get("User-Agent", "")
+    ip = get_client_ip()
 
-    conn.execute("""
+    connection = get_db()
+
+    connection.execute("""
         INSERT INTO visitors
-        (ip_address, country, region, device, browser, user_agent, visited_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (
+            ip_address,
+            country,
+            region,
+            device,
+            browser,
+            visited_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
     """, (
-        hash_ip(raw_ip),
+        hash_ip(ip),
         "Unknown",
         "Unknown",
-        detect_device(ua),
-        detect_browser(ua),
-        ua[:500],
+        detect_device(user_agent),
+        detect_browser(user_agent),
         datetime.now(timezone.utc).isoformat()
     ))
 
-    conn.commit()
-    conn.close()
+    connection.commit()
+    connection.close()
 
 
 @app.context_processor
-def inject_store():
+def store_information():
     return {
         "store_name": STORE_NAME,
         "store_address": STORE_ADDRESS,
@@ -212,14 +220,16 @@ def inject_store():
 def index():
     record_visitor()
 
-    conn = get_db()
-    products = conn.execute("""
+    connection = get_db()
+
+    products = connection.execute("""
         SELECT *
         FROM products
         WHERE active = 1
         ORDER BY id DESC
     """).fetchall()
-    conn.close()
+
+    connection.close()
 
     return render_template(
         "index.html",
@@ -229,12 +239,16 @@ def index():
 
 @app.route("/staff/login", methods=["GET", "POST"])
 def staff_login():
+
     if request.method == "POST":
+
         password = request.form.get("password", "")
 
         if secrets.compare_digest(password, STAFF_PASSWORD):
+
             session.clear()
             session["staff"] = True
+
             return redirect(url_for("dashboard"))
 
         flash("Incorrect staff password.", "error")
@@ -248,50 +262,45 @@ def staff_logout():
     return redirect(url_for("index"))
 
 
-def staff_required():
+def require_staff():
+
     if not session.get("staff"):
         abort(403)
 
 
 @app.route("/staff")
 def dashboard():
-    staff_required()
 
-    conn = get_db()
+    require_staff()
 
-    products = conn.execute("""
+    connection = get_db()
+
+    products = connection.execute("""
         SELECT *
         FROM products
         ORDER BY id DESC
     """).fetchall()
 
-    visitors = conn.execute("""
-        SELECT
-            id,
-            ip_address,
-            country,
-            region,
-            device,
-            browser,
-            visited_at
+    visitors = connection.execute("""
+        SELECT *
         FROM visitors
         ORDER BY id DESC
         LIMIT 200
     """).fetchall()
 
-    total_visitors = conn.execute(
+    total_visitors = connection.execute(
         "SELECT COUNT(*) FROM visitors"
     ).fetchone()[0]
 
-    total_stock = conn.execute(
+    total_stock = connection.execute(
         "SELECT COALESCE(SUM(stock), 0) FROM products"
     ).fetchone()[0]
 
-    product_count = conn.execute(
+    product_count = connection.execute(
         "SELECT COUNT(*) FROM products"
     ).fetchone()[0]
 
-    conn.close()
+    connection.close()
 
     return render_template(
         "dashboard.html",
@@ -305,48 +314,8 @@ def dashboard():
 
 @app.route("/staff/product/new", methods=["POST"])
 def create_product():
-    staff_required()
 
-    name = request.form.get("name", "").strip()
-
-    if not name:
-        flash("Product name is required.", "error")
-        return redirect(url_for("dashboard"))
-
-    try:
-        price = float(request.form.get("price", 0))
-        stock = int(request.form.get("stock", 0))
-    except ValueError:
-        flash("Price and stock must be valid numbers.", "error")
-        return redirect(url_for("dashboard"))
-
-    conn = get_db()
-
-    conn.execute("""
-        INSERT INTO products
-        (name, description, price, stock, sizes, color, image_url, active, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
-    """, (
-        name,
-        request.form.get("description", "").strip(),
-        max(price, 0),
-        max(stock, 0),
-        request.form.get("sizes", "").strip(),
-        request.form.get("color", "").strip(),
-        request.form.get("image_url", "").strip(),
-        datetime.now(timezone.utc).isoformat()
-    ))
-
-    conn.commit()
-    conn.close()
-
-    flash("Product added.", "success")
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/staff/product/<int:product_id>/update", methods=["POST"])
-def update_product(product_id):
-    staff_required()
+    require_staff()
 
     name = request.form.get("name", "").strip()
 
@@ -357,26 +326,82 @@ def update_product(product_id):
     try:
         price = max(float(request.form.get("price", 0)), 0)
         stock = max(int(request.form.get("stock", 0)), 0)
+
     except ValueError:
-        flash("Price and stock must be valid numbers.", "error")
+        flash("Invalid price or stock.", "error")
+        return redirect(url_for("dashboard"))
+
+    connection = get_db()
+
+    connection.execute("""
+        INSERT INTO products
+        (
+            name,
+            description,
+            price,
+            stock,
+            sizes,
+            color,
+            image_url,
+            active,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+    """, (
+        name,
+        request.form.get("description", "").strip(),
+        price,
+        stock,
+        request.form.get("sizes", "").strip(),
+        request.form.get("color", "").strip(),
+        request.form.get("image_url", "").strip(),
+        datetime.now(timezone.utc).isoformat()
+    ))
+
+    connection.commit()
+    connection.close()
+
+    flash("Product added successfully.", "success")
+
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/staff/product/<int:product_id>/update", methods=["POST"])
+def update_product(product_id):
+
+    require_staff()
+
+    name = request.form.get("name", "").strip()
+
+    if not name:
+        flash("Product name is required.", "error")
+        return redirect(url_for("dashboard"))
+
+    try:
+        price = max(float(request.form.get("price", 0)), 0)
+        stock = max(int(request.form.get("stock", 0)), 0)
+
+    except ValueError:
+        flash("Invalid price or stock.", "error")
         return redirect(url_for("dashboard"))
 
     active = 1 if request.form.get("active") == "1" else 0
 
-    conn = get_db()
+    connection = get_db()
 
-    exists = conn.execute(
+    product = connection.execute(
         "SELECT id FROM products WHERE id = ?",
         (product_id,)
     ).fetchone()
 
-    if not exists:
-        conn.close()
+    if not product:
+        connection.close()
         abort(404)
 
-    conn.execute("""
+    connection.execute("""
         UPDATE products
-        SET name = ?,
+        SET
+            name = ?,
             description = ?,
             price = ?,
             stock = ?,
@@ -397,26 +422,31 @@ def update_product(product_id):
         product_id
     ))
 
-    conn.commit()
-    conn.close()
+    connection.commit()
+    connection.close()
 
-    flash("Product updated.", "success")
+    flash("Product updated successfully.", "success")
+
     return redirect(url_for("dashboard"))
 
 
 @app.route("/staff/product/<int:product_id>/delete", methods=["POST"])
 def delete_product(product_id):
-    staff_required()
 
-    conn = get_db()
-    conn.execute(
+    require_staff()
+
+    connection = get_db()
+
+    connection.execute(
         "DELETE FROM products WHERE id = ?",
         (product_id,)
     )
-    conn.commit()
-    conn.close()
+
+    connection.commit()
+    connection.close()
 
     flash("Product deleted.", "success")
+
     return redirect(url_for("dashboard"))
 
 
@@ -430,10 +460,10 @@ def not_found(error):
     return "Page not found.", 404
 
 
-if __name__ == "__main__":
-    init_db()
+init_db()
 
-    # Debug should be disabled in production.
+
+if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=int(os.getenv("PORT", "5000")),
